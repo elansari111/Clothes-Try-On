@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, systemPreferences, session } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -24,6 +24,22 @@ function createWindow() {
     },
   });
 
+  // Handle media device permissions securely in Electron
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    if (permission === 'media') {
+      callback(true);
+      return;
+    }
+    callback(false);
+  });
+
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+    if (permission === 'media') {
+      return true;
+    }
+    return false;
+  });
+
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
@@ -35,7 +51,16 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // macOS system permission check if applicable
+  if (process.platform === 'darwin') {
+    try {
+      await systemPreferences.askForMediaAccess('camera');
+    } catch {
+      // Ignore if not supported on the platform
+    }
+  }
+
   createWindow();
 
   app.on('activate', () => {
