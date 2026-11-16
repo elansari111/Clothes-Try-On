@@ -1,0 +1,16 @@
+{
+  "name": "virtual-try-on",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop Virtual Try-On application using Electron, React, MediaPipe and Canvas/Three.js",
+  "main": "dist-electron/main/index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
