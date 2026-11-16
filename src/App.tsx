@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { CLOTHES, Garment } from './types';
 import { useCamera } from './hooks/useCamera';
+import { usePoseTracking } from './hooks/usePoseTracking';
 import { VideoResolution } from './types/camera';
 import {
   Camera,
@@ -14,15 +15,20 @@ import {
   AlertCircle,
   X,
   ChevronDown,
+  Activity,
+  Scan,
 } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [selectedGarment, setSelectedGarment] = useState<Garment>(CLOTHES[0]);
   const [filter, setFilter] = useState<string>('All');
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+  const [showSkeleton, setShowSkeleton] = useState<boolean>(true);
+
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const {
-    status,
+    status: cameraStatus,
     devices,
     activeDeviceId,
     resolution,
@@ -37,14 +43,29 @@ export const App: React.FC = () => {
     toggleMirror,
   } = useCamera();
 
+  // MediaPipe Pose tracking hook
+  const {
+    status: poseStatus,
+    delegate,
+    fps,
+    confidence,
+    measurements,
+  } = usePoseTracking({
+    videoRef,
+    canvasRef,
+    isCameraActive: cameraStatus === 'active',
+    isMirrored,
+    showSkeleton,
+  });
+
   const categories = ['All', 'T-Shirts', 'Shirts', 'Jackets', 'Pants'];
 
   const filteredClothes =
     filter === 'All' ? CLOTHES : CLOTHES.filter((c) => c.category === filter);
 
-  // Status indicator label and styles
-  const getStatusDisplay = () => {
-    switch (status) {
+  // Dynamic Camera status display
+  const getCameraStatusDisplay = () => {
+    switch (cameraStatus) {
       case 'active':
         return {
           label: 'Caméra active',
@@ -73,7 +94,51 @@ export const App: React.FC = () => {
     }
   };
 
-  const statusDisplay = getStatusDisplay();
+  // Dynamic Pose Tracking status display
+  const getPoseStatusDisplay = () => {
+    switch (poseStatus) {
+      case 'active':
+        return {
+          label: `Corps détecté (${confidence}%)`,
+          dotClass: 'bg-emerald-400',
+          textClass: 'text-emerald-400',
+        };
+      case 'detecting':
+        return {
+          label: 'Recherche du corps...',
+          dotClass: 'bg-cyan-400 animate-pulse',
+          textClass: 'text-cyan-400',
+        };
+      case 'initializing':
+        return {
+          label: 'Modèle IA en chargement...',
+          dotClass: 'bg-amber-400 animate-spin',
+          textClass: 'text-amber-400',
+        };
+      case 'lost':
+        return {
+          label: 'Suivi perdu',
+          dotClass: 'bg-amber-500',
+          textClass: 'text-amber-400',
+        };
+      case 'error':
+        return {
+          label: 'Erreur détection',
+          dotClass: 'bg-rose-500',
+          textClass: 'text-rose-400',
+        };
+      case 'no_person':
+      default:
+        return {
+          label: 'Aucun utilisateur détecté',
+          dotClass: 'bg-slate-500',
+          textClass: 'text-slate-400',
+        };
+    }
+  };
+
+  const cameraDisplay = getCameraStatusDisplay();
+  const poseDisplay = getPoseStatusDisplay();
 
   return (
     <div className="flex h-screen w-screen bg-[#0d0f15] text-slate-100 font-sans select-none overflow-hidden">
@@ -114,17 +179,20 @@ export const App: React.FC = () => {
               <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
             </div>
 
-            {/* Badge de Résolution lorsque la caméra tourne */}
-            {status === 'active' && (
-              <span className="text-[11px] font-mono text-slate-400 px-2 py-1 rounded-xl bg-[#141824] border border-[#222838]">
-                {resolution}
-              </span>
+            {/* Badge Tracking Body Status & FPS lorsque la caméra est active */}
+            {cameraStatus === 'active' && (
+              <div className="flex items-center gap-2 text-xs px-2.5 py-1 rounded-xl bg-[#141824] border border-[#222838]">
+                <Activity className="w-3.5 h-3.5 text-indigo-400" />
+                <span className="text-[11px] font-mono text-slate-300">
+                  {fps} FPS • {delegate}
+                </span>
+              </div>
             )}
 
-            {/* Indicateur d'état dynamique */}
+            {/* Indicateur de statut de la caméra */}
             <div className="flex items-center gap-2 text-xs px-2.5 py-1 rounded-xl bg-[#141824] border border-[#222838]">
-              <span className={`w-2 h-2 rounded-full ${statusDisplay.dotClass}`}></span>
-              <span className={statusDisplay.textClass}>{statusDisplay.label}</span>
+              <span className={`w-2 h-2 rounded-full ${cameraDisplay.dotClass}`}></span>
+              <span className={cameraDisplay.textClass}>{cameraDisplay.label}</span>
             </div>
           </div>
         </div>
@@ -138,13 +206,43 @@ export const App: React.FC = () => {
             playsInline
             muted
             className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
-              status === 'active' ? 'opacity-100' : 'opacity-0 pointer-events-none'
+              cameraStatus === 'active' ? 'opacity-100' : 'opacity-0 pointer-events-none'
             } ${isMirrored ? 'scale-x-[-1]' : ''}`}
           />
 
+          {/* Canvas 2D pour le rendu du squelette MediaPipe */}
+          <canvas
+            ref={canvasRef}
+            className={`absolute inset-0 w-full h-full object-cover pointer-events-none transition-opacity duration-200 ${
+              cameraStatus === 'active' && showSkeleton ? 'opacity-100' : 'opacity-0'
+            }`}
+          />
+
+          {/* HUD d'état du suivi corporel en haut à gauche */}
+          {cameraStatus === 'active' && (
+            <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-[#0d0f15]/85 backdrop-blur-md border border-[#222838] px-3 py-1.5 rounded-xl text-xs">
+              <span className={`w-2 h-2 rounded-full ${poseDisplay.dotClass}`} />
+              <span className={`font-medium ${poseDisplay.textClass}`}>{poseDisplay.label}</span>
+            </div>
+          )}
+
           {/* Contrôles HUD rapides quand la caméra est active */}
-          {status === 'active' && (
+          {cameraStatus === 'active' && (
             <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
+              {/* Toggle Squelette */}
+              <button
+                onClick={() => setShowSkeleton((prev) => !prev)}
+                className={`p-2 rounded-xl backdrop-blur-md border transition ${
+                  showSkeleton
+                    ? 'bg-indigo-600/80 text-white border-indigo-500'
+                    : 'bg-[#0d0f15]/80 text-slate-300 hover:text-white border-[#222838]'
+                }`}
+                title={showSkeleton ? 'Masquer le squelette' : 'Afficher le squelette'}
+              >
+                <Scan className="w-4 h-4" />
+              </button>
+
+              {/* Mode Miroir (Selfie) */}
               <button
                 onClick={toggleMirror}
                 className={`p-2 rounded-xl backdrop-blur-md border transition ${
@@ -157,6 +255,7 @@ export const App: React.FC = () => {
                 <FlipHorizontal className="w-4 h-4" />
               </button>
 
+              {/* Redémarrer la caméra */}
               <button
                 onClick={() => restartCamera()}
                 className="p-2 rounded-xl bg-[#0d0f15]/80 hover:bg-[#181d2c] text-slate-300 hover:text-white backdrop-blur-md border border-[#222838] transition"
@@ -165,6 +264,7 @@ export const App: React.FC = () => {
                 <RotateCw className="w-4 h-4" />
               </button>
 
+              {/* Arrêter la caméra */}
               <button
                 onClick={stopCamera}
                 className="p-2 rounded-xl bg-rose-600/80 hover:bg-rose-600 text-white backdrop-blur-md border border-rose-500 transition"
@@ -176,12 +276,12 @@ export const App: React.FC = () => {
           )}
 
           {/* Centre Placeholder Caméra (quand inactive, chargement ou erreur) */}
-          {status !== 'active' && (
+          {cameraStatus !== 'active' && (
             <div className="flex flex-col items-center text-center p-6 max-w-sm z-10">
               <div className="w-16 h-16 rounded-2xl bg-[#1c2233] border border-[#2d354b] flex items-center justify-center text-indigo-400 mb-4 shadow-lg">
-                {status === 'initializing' ? (
+                {cameraStatus === 'initializing' ? (
                   <Loader2 className="w-8 h-8 animate-spin text-indigo-400" />
-                ) : status === 'error' ? (
+                ) : cameraStatus === 'error' ? (
                   <AlertCircle className="w-8 h-8 text-rose-400" />
                 ) : (
                   <Camera className="w-8 h-8" />
@@ -189,9 +289,9 @@ export const App: React.FC = () => {
               </div>
 
               <h2 className="text-base font-semibold text-white mb-1">
-                {status === 'initializing'
+                {cameraStatus === 'initializing'
                   ? 'Initialisation de la caméra...'
-                  : status === 'error'
+                  : cameraStatus === 'error'
                   ? 'Erreur de connexion webcam'
                   : 'Aperçu Caméra'}
               </h2>
@@ -202,7 +302,7 @@ export const App: React.FC = () => {
                   : 'Placez-vous devant votre webcam pour essayer le vêtement sélectionné.'}
               </p>
 
-              {status === 'initializing' ? (
+              {cameraStatus === 'initializing' ? (
                 <button
                   disabled
                   className="px-5 py-2.5 bg-indigo-600/50 text-white text-xs font-semibold rounded-xl flex items-center gap-2 cursor-wait"
@@ -217,7 +317,7 @@ export const App: React.FC = () => {
                   className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl flex items-center gap-2 transition shadow-md shadow-indigo-600/30"
                 >
                   <Camera className="w-4 h-4" />
-                  <span>{status === 'error' ? 'Réessayer' : 'Activer la caméra'}</span>
+                  <span>{cameraStatus === 'error' ? 'Réessayer' : 'Activer la caméra'}</span>
                 </button>
               )}
             </div>
@@ -257,7 +357,7 @@ export const App: React.FC = () => {
           {showSettingsModal && (
             <div className="absolute bottom-20 right-4 w-72 bg-[#121622] border border-[#273044] rounded-2xl p-4 shadow-2xl z-20 space-y-4">
               <div className="flex items-center justify-between pb-2 border-b border-[#1e2637]">
-                <span className="text-xs font-bold text-white">Réglages Caméra</span>
+                <span className="text-xs font-bold text-white">Réglages Caméra & IA</span>
                 <button
                   onClick={() => setShowSettingsModal(false)}
                   className="text-slate-400 hover:text-white"
@@ -325,6 +425,47 @@ export const App: React.FC = () => {
                   />
                 </button>
               </div>
+
+              {/* Option Affichage Squelette */}
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-xs text-slate-300">Afficher le Squelette</span>
+                <button
+                  onClick={() => setShowSkeleton((prev) => !prev)}
+                  className={`w-9 h-5 rounded-full relative transition ${
+                    showSkeleton ? 'bg-indigo-600' : 'bg-[#273044]'
+                  }`}
+                >
+                  <span
+                    className={`w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 transition-all ${
+                      showSkeleton ? 'right-1' : 'left-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Informations biométriques normalisées */}
+              {measurements && (
+                <div className="pt-2 border-t border-[#1e2637] text-[10px] font-mono text-slate-400 space-y-1">
+                  <div className="flex justify-between">
+                    <span>Largeur épaules :</span>
+                    <span className="text-indigo-400 font-bold">
+                      {(measurements.shoulderWidth * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Hauteur torse :</span>
+                    <span className="text-indigo-400 font-bold">
+                      {(measurements.torsoHeight * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Inclinaison torse :</span>
+                    <span className="text-indigo-400 font-bold">
+                      {measurements.bodyOrientationAngle.toFixed(1)}°
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
