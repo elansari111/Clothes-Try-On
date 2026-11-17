@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ClothingItem } from './types/clothing';
+import { TryOnAdjustments } from './types/rendering';
 import { ClothingService } from './services/product-importer/clothingService';
 import { ClothingImportModal } from './components/Clothing/ClothingImportModal';
 import { useCamera } from './hooks/useCamera';
 import { usePoseTracking } from './hooks/usePoseTracking';
+import { virtualTryOnEngine } from './engines/rendering/virtualTryOnEngine';
 import { VideoResolution } from './types/camera';
 import {
   Camera,
@@ -21,7 +23,18 @@ import {
   Scan,
   Plus,
   Trash2,
+  Eye,
+  EyeOff,
+  RotateCcw,
 } from 'lucide-react';
+
+const INITIAL_ADJUSTMENTS: TryOnAdjustments = {
+  scale: 1.0,
+  offsetX: 0,
+  offsetY: 0,
+  opacity: 0.96,
+  enableWarping: true,
+};
 
 export const App: React.FC = () => {
   // Load persisted clothes from ClothingService
@@ -34,7 +47,9 @@ export const App: React.FC = () => {
   const [filter, setFilter] = useState<string>('All');
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [showImportModal, setShowImportModal] = useState<boolean>(false);
-  const [showSkeleton, setShowSkeleton] = useState<boolean>(true);
+  const [showSkeleton, setShowSkeleton] = useState<boolean>(false);
+  const [showGarment, setShowGarment] = useState<boolean>(true);
+  const [adjustments, setAdjustments] = useState<TryOnAdjustments>(INITIAL_ADJUSTMENTS);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -54,11 +69,12 @@ export const App: React.FC = () => {
     toggleMirror,
   } = useCamera();
 
-  // MediaPipe Pose tracking hook
+  // MediaPipe Pose tracking + Virtual Try-On unified loop
   const {
     status: poseStatus,
     delegate,
     fps,
+    renderLatencyMs,
     confidence,
     measurements,
   } = usePoseTracking({
@@ -67,6 +83,9 @@ export const App: React.FC = () => {
     isCameraActive: cameraStatus === 'active',
     isMirrored,
     showSkeleton,
+    selectedGarment,
+    showGarment,
+    adjustments,
   });
 
   const categories = ['All', 'T-Shirts', 'Shirts', 'Jackets', 'Pants', 'Other'];
@@ -94,6 +113,11 @@ export const App: React.FC = () => {
         setSelectedGarment(updated[0]);
       }
     }
+  };
+
+  const handleResetAdjustments = () => {
+    setAdjustments(INITIAL_ADJUSTMENTS);
+    virtualTryOnEngine.resetTransform();
   };
 
   // Sync selectedGarment if empty
@@ -219,12 +243,12 @@ export const App: React.FC = () => {
               <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
             </div>
 
-            {/* Badge Tracking Body Status & FPS lorsque la caméra est active */}
+            {/* Badge Tracking Body Status, FPS & Latency lorsque la caméra est active */}
             {cameraStatus === 'active' && (
               <div className="flex items-center gap-2 text-xs px-2.5 py-1 rounded-xl bg-[#141824] border border-[#222838]">
                 <Activity className="w-3.5 h-3.5 text-indigo-400" />
                 <span className="text-[11px] font-mono text-slate-300">
-                  {fps} FPS • {delegate}
+                  {fps} FPS • {renderLatencyMs}ms • {delegate}
                 </span>
               </div>
             )}
@@ -250,11 +274,11 @@ export const App: React.FC = () => {
             } ${isMirrored ? 'scale-x-[-1]' : ''}`}
           />
 
-          {/* Canvas 2D pour le rendu du squelette MediaPipe */}
+          {/* Canvas 2D unifié pour le rendu Virtual Try-On + Squelette */}
           <canvas
             ref={canvasRef}
             className={`absolute inset-0 w-full h-full object-cover pointer-events-none transition-opacity duration-200 ${
-              cameraStatus === 'active' && showSkeleton ? 'opacity-100' : 'opacity-0'
+              cameraStatus === 'active' ? 'opacity-100' : 'opacity-0'
             }`}
           />
 
@@ -269,6 +293,19 @@ export const App: React.FC = () => {
           {/* Contrôles HUD rapides quand la caméra est active */}
           {cameraStatus === 'active' && (
             <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
+              {/* Toggle Vêtement (Afficher / Masquer) */}
+              <button
+                onClick={() => setShowGarment((prev) => !prev)}
+                className={`p-2 rounded-xl backdrop-blur-md border transition ${
+                  showGarment
+                    ? 'bg-indigo-600/80 text-white border-indigo-500'
+                    : 'bg-[#0d0f15]/80 text-slate-300 hover:text-white border-[#222838]'
+                }`}
+                title={showGarment ? 'Masquer le vêtement' : 'Afficher le vêtement'}
+              >
+                {showGarment ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+              </button>
+
               {/* Toggle Squelette */}
               <button
                 onClick={() => setShowSkeleton((prev) => !prev)}
@@ -381,31 +418,151 @@ export const App: React.FC = () => {
                 </div>
               </div>
 
-              <button
-                onClick={() => setShowSettingsModal((prev) => !prev)}
-                className={`p-2 rounded-lg transition border ${
-                  showSettingsModal
-                    ? 'bg-indigo-600 text-white border-indigo-500'
-                    : 'bg-[#181d2c] hover:bg-[#20273a] text-slate-300 border-[#2d354b]'
-                }`}
-                title="Paramètres de la caméra"
-              >
-                <SlidersHorizontal className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleResetAdjustments}
+                  className="p-2 rounded-lg bg-[#181d2c] hover:bg-[#20273a] text-slate-300 border border-[#2d354b] transition"
+                  title="Réinitialiser la position du vêtement"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setShowSettingsModal((prev) => !prev)}
+                  className={`p-2 rounded-lg transition border ${
+                    showSettingsModal
+                      ? 'bg-indigo-600 text-white border-indigo-500'
+                      : 'bg-[#181d2c] hover:bg-[#20273a] text-slate-300 border-[#2d354b]'
+                  }`}
+                  title="Paramètres Try-On & Caméra"
+                >
+                  <SlidersHorizontal className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           )}
 
-          {/* Modal / Popover Paramètres Caméra */}
+          {/* Modal / Popover Paramètres Try-On & Caméra */}
           {showSettingsModal && (
-            <div className="absolute bottom-20 right-4 w-72 bg-[#121622] border border-[#273044] rounded-2xl p-4 shadow-2xl z-20 space-y-4">
+            <div className="absolute bottom-20 right-4 w-80 max-h-[75%] overflow-y-auto bg-[#121622] border border-[#273044] rounded-2xl p-4 shadow-2xl z-20 space-y-4">
               <div className="flex items-center justify-between pb-2 border-b border-[#1e2637]">
-                <span className="text-xs font-bold text-white">Réglages Caméra & IA</span>
+                <span className="text-xs font-bold text-white">Réglages Try-On & Caméra</span>
                 <button
                   onClick={() => setShowSettingsModal(false)}
                   className="text-slate-400 hover:text-white"
                 >
                   <X className="w-4 h-4" />
                 </button>
+              </div>
+
+              {/* Section Ajustements Vêtement (Phase 06) */}
+              <div className="space-y-3 pb-3 border-b border-[#1e2637]">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-indigo-400 uppercase tracking-wider">
+                    Ajustement Vêtement
+                  </span>
+                  <button
+                    onClick={handleResetAdjustments}
+                    className="text-[10px] text-slate-400 hover:text-white flex items-center gap-1"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Réinitialiser</span>
+                  </button>
+                </div>
+
+                {/* Échelle */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-300">Échelle</span>
+                    <span className="font-mono text-indigo-400">
+                      {Math.round(adjustments.scale * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.6}
+                    max={1.6}
+                    step={0.02}
+                    value={adjustments.scale}
+                    onChange={(e) =>
+                      setAdjustments((prev) => ({ ...prev, scale: parseFloat(e.target.value) }))
+                    }
+                    className="w-full h-1.5 bg-[#1e2637] rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                  />
+                </div>
+
+                {/* Décalage Vertical (Y) */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-300">Position Verticale (Y)</span>
+                    <span className="font-mono text-indigo-400">{adjustments.offsetY} px</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={-120}
+                    max={120}
+                    step={2}
+                    value={adjustments.offsetY}
+                    onChange={(e) =>
+                      setAdjustments((prev) => ({ ...prev, offsetY: parseInt(e.target.value, 10) }))
+                    }
+                    className="w-full h-1.5 bg-[#1e2637] rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                  />
+                </div>
+
+                {/* Décalage Horizontal (X) */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-300">Position Horizontale (X)</span>
+                    <span className="font-mono text-indigo-400">{adjustments.offsetX} px</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={-120}
+                    max={120}
+                    step={2}
+                    value={adjustments.offsetX}
+                    onChange={(e) =>
+                      setAdjustments((prev) => ({ ...prev, offsetX: parseInt(e.target.value, 10) }))
+                    }
+                    className="w-full h-1.5 bg-[#1e2637] rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                  />
+                </div>
+
+                {/* Toggle Déformation 2D (Warping) */}
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-xs text-slate-300">Déformation 2D (Mesh Warp)</span>
+                  <button
+                    onClick={() =>
+                      setAdjustments((prev) => ({ ...prev, enableWarping: !prev.enableWarping }))
+                    }
+                    className={`w-9 h-5 rounded-full relative transition ${
+                      adjustments.enableWarping ? 'bg-indigo-600' : 'bg-[#273044]'
+                    }`}
+                  >
+                    <span
+                      className={`w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 transition-all ${
+                        adjustments.enableWarping ? 'right-1' : 'left-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Toggle Afficher le vêtement */}
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-xs text-slate-300">Afficher le Vêtement</span>
+                  <button
+                    onClick={() => setShowGarment((prev) => !prev)}
+                    className={`w-9 h-5 rounded-full relative transition ${
+                      showGarment ? 'bg-indigo-600' : 'bg-[#273044]'
+                    }`}
+                  >
+                    <span
+                      className={`w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 transition-all ${
+                        showGarment ? 'right-1' : 'left-1'
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
 
               {/* Sélection Caméra */}
@@ -505,6 +662,10 @@ export const App: React.FC = () => {
                     <span className="text-indigo-400 font-bold">
                       {measurements.bodyOrientationAngle.toFixed(1)}°
                     </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Latence rendu AR :</span>
+                    <span className="text-emerald-400 font-bold">{renderLatencyMs} ms</span>
                   </div>
                 </div>
               )}

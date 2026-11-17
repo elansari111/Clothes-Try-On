@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { PoseTrackingStatus, PoseFrameResult, BodyMeasurements, PoseEngineConfig } from '../types/pose';
+import { ClothingItem } from '../types/clothing';
+import { TryOnAdjustments } from '../types/rendering';
 import { poseEngineService } from '../engines/pose/poseEngineService';
 import { drawSkeleton } from '../engines/pose/skeletonRenderer';
+import { virtualTryOnEngine } from '../engines/rendering/virtualTryOnEngine';
 
 export interface UsePoseTrackingOptions {
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -9,7 +12,19 @@ export interface UsePoseTrackingOptions {
   isCameraActive: boolean;
   isMirrored?: boolean;
   showSkeleton?: boolean;
+  // Phase 06: Virtual Try-On integration (single unified rAF loop)
+  selectedGarment?: ClothingItem | null;
+  showGarment?: boolean;
+  adjustments?: TryOnAdjustments;
 }
+
+const DEFAULT_ADJUSTMENTS: TryOnAdjustments = {
+  scale: 1.0,
+  offsetX: 0,
+  offsetY: 0,
+  opacity: 0.95,
+  enableWarping: true,
+};
 
 export function usePoseTracking({
   videoRef,
@@ -17,22 +32,46 @@ export function usePoseTracking({
   isCameraActive,
   isMirrored = true,
   showSkeleton = true,
+  selectedGarment = null,
+  showGarment = true,
+  adjustments = DEFAULT_ADJUSTMENTS,
 }: UsePoseTrackingOptions) {
   const [status, setStatus] = useState<PoseTrackingStatus>('no_person');
   const [delegate, setDelegate] = useState<'GPU' | 'CPU'>('GPU');
   const [fps, setFps] = useState<number>(0);
+  const [renderLatencyMs, setRenderLatencyMs] = useState<number>(0);
   const [confidence, setConfidence] = useState<number>(0);
   const [measurements, setMeasurements] = useState<BodyMeasurements | null>(null);
 
-  // References for non-react render loop performance
+  // References for non-react render loop performance (avoids restarting rAF when UI controls change)
   const animFrameIdRef = useRef<number | null>(null);
   const isRunningRef = useRef<boolean>(false);
   const frameCountRef = useRef<number>(0);
   const lastFpsCalcTimeRef = useRef<number>(performance.now());
   const consecutiveMissesRef = useRef<number>(0);
+  const latencyAccumRef = useRef<number>(0);
+  const latencySamplesRef = useRef<number>(0);
+
+  // Live mutable config refs read inside rAF without restarting camera/MediaPipe
+  const isMirroredRef = useRef<boolean>(isMirrored);
+  const showSkeletonRef = useRef<boolean>(showSkeleton);
+  const selectedGarmentRef = useRef<ClothingItem | null>(selectedGarment);
+  const showGarmentRef = useRef<boolean>(showGarment);
+  const adjustmentsRef = useRef<TryOnAdjustments>(adjustments);
+
+  isMirroredRef.current = isMirrored;
+  showSkeletonRef.current = showSkeleton;
+  selectedGarmentRef.current = selectedGarment;
+  showGarmentRef.current = showGarment;
+  adjustmentsRef.current = adjustments;
 
   // Expose current frame result via ref for zero-latency access by other engines
   const latestFrameResultRef = useRef<PoseFrameResult | null>(null);
+
+  // Preload active garment image asynchronously whenever garment changes (never restarts camera/MediaPipe)
+  useEffect(() => {
+    void virtualTryOnEngine.setActiveGarment(selectedGarment);
+  }, [selectedGarment]);
 
   /**
    * Initializes the pose landmarker model
@@ -50,7 +89,10 @@ export function usePoseTracking({
   }, []);
 
   /**
-   * Main animation frame loop
+   * Unified real-time processing & rendering animation frame loop
+   * Layer 0: Native <video> behind canvas
+   * Layer 1: Virtual Try-On Garment Overlay
+   * Layer 2: Optional MediaPipe Skeleton Overlay
    */
   const startTrackingLoop = useCallback(() => {
     if (isRunningRef.current) return;
@@ -73,50 +115,81 @@ export function usePoseTracking({
 
         const ctx = canvas.getContext('2d');
         if (ctx) {
-          // Process frame with MediaPipe
-          const result = poseEngineService.processVideoFrame(video, timestamp);
+          // Process frame with MediaPipe (returns null if same video frame)
+          const frameResult = poseEngineService.processVideoFrame(video, timestamp);
 
-          // Clear canvas before each frame
+          if (frameResult !== null) {
+            if (frameResult.landmarks && frameResult.landmarks.length > 0) {
+              consecutiveMissesRef.current = 0;
+              latestFrameResultRef.current = frameResult;
+
+              // Update measurements and confidence at throttled rate
+              if (frameCountRef.current % 5 === 0) {
+                setStatus('active');
+                setConfidence(frameResult.confidence);
+                setMeasurements(frameResult.measurements);
+              }
+            } else {
+              consecutiveMissesRef.current++;
+              if (consecutiveMissesRef.current > 15) {
+                setStatus('no_person');
+                setConfidence(0);
+                latestFrameResultRef.current = null;
+                virtualTryOnEngine.resetTransform();
+              } else if (consecutiveMissesRef.current > 5) {
+                setStatus('lost');
+              }
+            }
+          }
+
+          // Always clear and render using the latest valid landmarks (keeps UI adjustments smooth even between video frames)
           ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-          if (result && result.landmarks && result.landmarks.length > 0) {
-            consecutiveMissesRef.current = 0;
-            latestFrameResultRef.current = result;
+          const activePose = latestFrameResultRef.current;
+          if (activePose && activePose.landmarks && activePose.landmarks.length > 0) {
+            // LAYER 1: Virtual Try-On Garment Overlay
+            const tryOnRes = virtualTryOnEngine.renderFrame({
+              ctx,
+              canvasWidth: canvas.width,
+              canvasHeight: canvas.height,
+              landmarks: activePose.landmarks,
+              garment: selectedGarmentRef.current,
+              isMirrored: isMirroredRef.current,
+              showGarment: showGarmentRef.current,
+              adjustments: adjustmentsRef.current,
+            });
 
-            // Render skeleton directly over the canvas
-            if (showSkeleton) {
-              drawSkeleton(ctx, result.landmarks, canvas.width, canvas.height, {
-                isMirrored,
+            if (tryOnRes.rendered) {
+              latencyAccumRef.current += tryOnRes.latencyMs;
+              latencySamplesRef.current += 1;
+            }
+
+            // LAYER 2: Optional Skeleton Visualization
+            if (showSkeletonRef.current) {
+              drawSkeleton(ctx, activePose.landmarks, canvas.width, canvas.height, {
+                isMirrored: isMirroredRef.current,
                 showLandmarks: true,
                 showConnections: true,
               });
             }
-
-            // Update measurements and confidence at throttled rate (every 5 frames to avoid React overhead)
-            if (frameCountRef.current % 5 === 0) {
-              setStatus('active');
-              setConfidence(result.confidence);
-              setMeasurements(result.measurements);
-            }
-          } else {
-            consecutiveMissesRef.current++;
-            if (consecutiveMissesRef.current > 15) {
-              // No body in frame for ~0.5s
-              setStatus('no_person');
-              setConfidence(0);
-              latestFrameResultRef.current = null;
-            } else if (consecutiveMissesRef.current > 5) {
-              setStatus('lost');
-            }
           }
         }
 
-        // FPS calculation
+        // FPS & average latency calculation (once per second)
         frameCountRef.current++;
         const now = performance.now();
         if (now - lastFpsCalcTimeRef.current >= 1000) {
           setFps(Math.round((frameCountRef.current * 1000) / (now - lastFpsCalcTimeRef.current)));
+          if (latencySamplesRef.current > 0) {
+            setRenderLatencyMs(
+              Math.round((latencyAccumRef.current / latencySamplesRef.current) * 10) / 10
+            );
+          } else {
+            setRenderLatencyMs(0);
+          }
           frameCountRef.current = 0;
+          latencyAccumRef.current = 0;
+          latencySamplesRef.current = 0;
           lastFpsCalcTimeRef.current = now;
         }
       }
@@ -125,7 +198,7 @@ export function usePoseTracking({
     };
 
     animFrameIdRef.current = requestAnimationFrame(loop);
-  }, [videoRef, canvasRef, showSkeleton, isMirrored]);
+  }, [videoRef, canvasRef]);
 
   /**
    * Stop tracking loop
@@ -137,7 +210,6 @@ export function usePoseTracking({
       animFrameIdRef.current = null;
     }
 
-    // Clear canvas
     if (canvasRef.current) {
       const ctx = canvasRef.current.getContext('2d');
       if (ctx) {
@@ -145,7 +217,10 @@ export function usePoseTracking({
       }
     }
 
+    latestFrameResultRef.current = null;
+    virtualTryOnEngine.resetTransform();
     setFps(0);
+    setRenderLatencyMs(0);
     setConfidence(0);
     setStatus('no_person');
   }, [canvasRef]);
@@ -174,6 +249,7 @@ export function usePoseTracking({
   useEffect(() => {
     return () => {
       stopTrackingLoop();
+      virtualTryOnEngine.dispose();
       poseEngineService.close();
     };
   }, [stopTrackingLoop]);
@@ -182,6 +258,7 @@ export function usePoseTracking({
     status,
     delegate,
     fps,
+    renderLatencyMs,
     confidence,
     measurements,
     latestFrameResultRef,
