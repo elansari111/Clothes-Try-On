@@ -1,5 +1,7 @@
-import React, { useState, useRef } from 'react';
-import { CLOTHES, Garment } from './types';
+import React, { useState, useRef, useEffect } from 'react';
+import { ClothingItem } from './types/clothing';
+import { ClothingService } from './services/product-importer/clothingService';
+import { ClothingImportModal } from './components/Clothing/ClothingImportModal';
 import { useCamera } from './hooks/useCamera';
 import { usePoseTracking } from './hooks/usePoseTracking';
 import { VideoResolution } from './types/camera';
@@ -17,12 +19,21 @@ import {
   ChevronDown,
   Activity,
   Scan,
+  Plus,
+  Trash2,
 } from 'lucide-react';
 
 export const App: React.FC = () => {
-  const [selectedGarment, setSelectedGarment] = useState<Garment>(CLOTHES[0]);
+  // Load persisted clothes from ClothingService
+  const [clothesList, setClothesList] = useState<ClothingItem[]>(() => ClothingService.getClothes());
+  const [selectedGarment, setSelectedGarment] = useState<ClothingItem>(() => {
+    const initial = ClothingService.getClothes();
+    return initial[0];
+  });
+
   const [filter, setFilter] = useState<string>('All');
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+  const [showImportModal, setShowImportModal] = useState<boolean>(false);
   const [showSkeleton, setShowSkeleton] = useState<boolean>(true);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -58,10 +69,39 @@ export const App: React.FC = () => {
     showSkeleton,
   });
 
-  const categories = ['All', 'T-Shirts', 'Shirts', 'Jackets', 'Pants'];
+  const categories = ['All', 'T-Shirts', 'Shirts', 'Jackets', 'Pants', 'Other'];
 
   const filteredClothes =
-    filter === 'All' ? CLOTHES : CLOTHES.filter((c) => c.category === filter);
+    filter === 'All' ? clothesList : clothesList.filter((c) => c.category === filter);
+
+  // Refresh clothing list when an item is imported or removed
+  const refreshClothes = () => {
+    const updated = ClothingService.getClothes();
+    setClothesList(updated);
+    if (!updated.some((item) => item.id === selectedGarment?.id)) {
+      if (updated.length > 0) {
+        setSelectedGarment(updated[0]);
+      }
+    }
+  };
+
+  const handleDeleteClothing = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (confirm('Voulez-vous supprimer ce vêtement ?')) {
+      const updated = ClothingService.deleteItem(id);
+      setClothesList(updated);
+      if (selectedGarment.id === id && updated.length > 0) {
+        setSelectedGarment(updated[0]);
+      }
+    }
+  };
+
+  // Sync selectedGarment if empty
+  useEffect(() => {
+    if (!selectedGarment && clothesList.length > 0) {
+      setSelectedGarment(clothesList[0]);
+    }
+  }, [clothesList, selectedGarment]);
 
   // Dynamic Camera status display
   const getCameraStatusDisplay = () => {
@@ -324,34 +364,36 @@ export const App: React.FC = () => {
           )}
 
           {/* Vêtement actuellement sélectionné (Overlay info en bas) */}
-          <div className="absolute bottom-4 inset-x-4 bg-[#0d0f15]/90 backdrop-blur border border-[#222838] rounded-xl p-3 flex items-center justify-between z-10">
-            <div className="flex items-center gap-3">
-              <img
-                src={selectedGarment.image}
-                alt={selectedGarment.name}
-                className="w-11 h-11 rounded-lg object-cover border border-[#2d354b]"
-              />
-              <div>
-                <span className="text-[10px] uppercase tracking-wider text-indigo-400 font-semibold">
-                  Vêtement actif
-                </span>
-                <div className="text-xs font-bold text-white">{selectedGarment.name}</div>
-                <div className="text-[11px] text-slate-400">{selectedGarment.price}</div>
+          {selectedGarment && (
+            <div className="absolute bottom-4 inset-x-4 bg-[#0d0f15]/90 backdrop-blur border border-[#222838] rounded-xl p-3 flex items-center justify-between z-10">
+              <div className="flex items-center gap-3">
+                <img
+                  src={selectedGarment.imagePath}
+                  alt={selectedGarment.name}
+                  className="w-11 h-11 rounded-lg object-contain bg-[#1c2233] border border-[#2d354b]"
+                />
+                <div>
+                  <span className="text-[10px] uppercase tracking-wider text-indigo-400 font-semibold">
+                    Vêtement actif {selectedGarment.isCustom && '• Importé'}
+                  </span>
+                  <div className="text-xs font-bold text-white">{selectedGarment.name}</div>
+                  <div className="text-[11px] text-slate-400">{selectedGarment.price}</div>
+                </div>
               </div>
-            </div>
 
-            <button
-              onClick={() => setShowSettingsModal((prev) => !prev)}
-              className={`p-2 rounded-lg transition border ${
-                showSettingsModal
-                  ? 'bg-indigo-600 text-white border-indigo-500'
-                  : 'bg-[#181d2c] hover:bg-[#20273a] text-slate-300 border-[#2d354b]'
-              }`}
-              title="Paramètres de la caméra"
-            >
-              <SlidersHorizontal className="w-4 h-4" />
-            </button>
-          </div>
+              <button
+                onClick={() => setShowSettingsModal((prev) => !prev)}
+                className={`p-2 rounded-lg transition border ${
+                  showSettingsModal
+                    ? 'bg-indigo-600 text-white border-indigo-500'
+                    : 'bg-[#181d2c] hover:bg-[#20273a] text-slate-300 border-[#2d354b]'
+                }`}
+                title="Paramètres de la caméra"
+              >
+                <SlidersHorizontal className="w-4 h-4" />
+              </button>
+            </div>
+          )}
 
           {/* Modal / Popover Paramètres Caméra */}
           {showSettingsModal && (
@@ -478,16 +520,27 @@ export const App: React.FC = () => {
             <Shirt className="w-4 h-4 text-indigo-400" />
             <h2 className="text-sm font-bold text-white">Catalogue Vêtements</h2>
           </div>
-          <span className="text-xs text-slate-400 font-mono">{filteredClothes.length} articles</span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-400 font-mono">{filteredClothes.length} articles</span>
+            {/* Bouton Importer un vêtement */}
+            <button
+              onClick={() => setShowImportModal(true)}
+              className="p-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition flex items-center gap-1 text-xs font-semibold shadow-sm"
+              title="Importer un vêtement"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Importer</span>
+            </button>
+          </div>
         </div>
 
         {/* Filtres de catégories */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-3 mb-3">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-3 mb-3 no-scrollbar">
           {categories.map((cat) => (
             <button
               key={cat}
               onClick={() => setFilter(cat)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition shrink-0 ${
                 filter === cat
                   ? 'bg-indigo-600 text-white font-semibold'
                   : 'bg-[#161a26] text-slate-400 hover:text-white border border-[#20273a]'
@@ -501,37 +554,57 @@ export const App: React.FC = () => {
         {/* Liste / Grille simple des vêtements */}
         <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
           {filteredClothes.map((garment) => {
-            const isSelected = selectedGarment.id === garment.id;
+            const isSelected = selectedGarment?.id === garment.id;
             return (
               <div
                 key={garment.id}
                 onClick={() => setSelectedGarment(garment)}
-                className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition ${
+                className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition group ${
                   isSelected
                     ? 'bg-indigo-600/10 border-indigo-500 shadow-sm'
                     : 'bg-[#141824] border-[#1e2330] hover:border-[#2d354b]'
                 }`}
               >
                 <img
-                  src={garment.image}
+                  src={garment.imagePath}
                   alt={garment.name}
-                  className="w-14 h-14 rounded-lg object-cover bg-[#1c2233] border border-[#252c3f] shrink-0"
+                  className="w-14 h-14 rounded-lg object-contain bg-[#1c2233] border border-[#252c3f] shrink-0"
                 />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-semibold text-white truncate">{garment.name}</div>
                   <div className="text-[11px] text-slate-400">{garment.category}</div>
                   <div className="text-xs font-bold text-indigo-400 mt-0.5">{garment.price}</div>
                 </div>
-                {isSelected && (
-                  <span className="text-[10px] font-bold text-indigo-400 bg-indigo-500/10 px-2 py-1 rounded-md border border-indigo-500/20">
-                    Actif
-                  </span>
-                )}
+
+                <div className="flex items-center gap-1">
+                  {/* Bouton supprimer pour les vêtements personnalisés */}
+                  {garment.isCustom && (
+                    <button
+                      onClick={(e) => handleDeleteClothing(e, garment.id)}
+                      className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg transition opacity-0 group-hover:opacity-100"
+                      title="Supprimer ce vêtement"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  {isSelected && (
+                    <span className="text-[10px] font-bold text-indigo-400 bg-indigo-500/10 px-2 py-1 rounded-md border border-indigo-500/20">
+                      Actif
+                    </span>
+                  )}
+                </div>
               </div>
             );
           })}
         </div>
       </div>
+
+      {/* Modal d'importation de vêtement */}
+      <ClothingImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        onImportSuccess={refreshClothes}
+      />
     </div>
   );
 };
