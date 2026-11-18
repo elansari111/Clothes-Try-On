@@ -1,7 +1,7 @@
 import { NormalizedLandmark } from '../../types/pose';
 import { ClothingItem } from '../../types/clothing';
 import { TryOnAdjustments } from '../../types/rendering';
-import { garmentLoader } from './garmentLoader';
+import { garmentLoader, ProcessedGarmentAsset } from './garmentLoader';
 import { bodyClothingMapper } from './bodyClothingMapper';
 import { garmentTransformer } from './garmentTransformer';
 import { clothingRenderer } from './clothingRenderer';
@@ -17,55 +17,86 @@ export interface RenderFrameParams {
   adjustments: TryOnAdjustments;
 }
 
+export interface GarmentAssetStatus {
+  ready: boolean;
+  hasTransparency: boolean;
+  backgroundRemoved: boolean;
+  hangerRemoved: boolean;
+  hadOpaqueBackground: boolean;
+  croppedWidth: number;
+  croppedHeight: number;
+}
+
 export class VirtualTryOnEngine {
   private activeGarmentId: string | null = null;
-  private activeImage: HTMLImageElement | null = null;
+  private activeAsset: ProcessedGarmentAsset | null = null;
   private lastRenderDurationMs: number = 0;
 
   /**
-   * Preloads and prepares the active garment image asset without restarting tracking/camera
+   * Preloads, removes opaque studio backgrounds if needed, crops tight bounding box,
+   * and caches the active garment asset without restarting camera or MediaPipe.
    */
-  async setActiveGarment(item: ClothingItem | null): Promise<void> {
+  async setActiveGarment(item: ClothingItem | null, forceReload: boolean = false): Promise<GarmentAssetStatus | null> {
     if (!item) {
       this.activeGarmentId = null;
-      this.activeImage = null;
+      this.activeAsset = null;
       garmentTransformer.reset();
-      return;
+      return null;
     }
 
-    if (this.activeGarmentId === item.id && this.activeImage) {
-      return;
+    if (forceReload) {
+      garmentLoader.invalidateItem(item.id);
+      this.activeAsset = null;
+    }
+
+    if (!forceReload && this.activeGarmentId === item.id && this.activeAsset) {
+      return this.toAssetStatus(this.activeAsset);
     }
 
     this.activeGarmentId = item.id;
     garmentTransformer.reset();
 
-    // Use cached image immediately if available
-    const cached = garmentLoader.getCachedImage(item);
-    if (cached) {
-      this.activeImage = cached;
-      return;
+    // Use cached processed asset immediately if available
+    const cached = garmentLoader.getCachedAsset(item);
+    if (cached && !forceReload) {
+      this.activeAsset = cached;
+      return this.toAssetStatus(cached);
     }
 
     try {
-      const loadedImg = await garmentLoader.loadGarmentImage(item);
+      const processedAsset = await garmentLoader.loadGarmentAsset(item);
       // Guard against stale async load if user switched garments rapidly
       if (this.activeGarmentId === item.id) {
-        this.activeImage = loadedImg;
+        this.activeAsset = processedAsset;
+        return this.toAssetStatus(processedAsset);
       }
+      return null;
     } catch (err) {
-      console.warn('VirtualTryOnEngine failed to load garment image:', err);
+      console.warn('VirtualTryOnEngine failed to load garment asset:', err);
       if (this.activeGarmentId === item.id) {
-        this.activeImage = null;
+        this.activeAsset = null;
       }
+      return null;
     }
+  }
+
+  private toAssetStatus(asset: ProcessedGarmentAsset): GarmentAssetStatus {
+    return {
+      ready: true,
+      hasTransparency: asset.hasTransparency,
+      backgroundRemoved: asset.backgroundRemoved,
+      hangerRemoved: asset.hangerRemoved,
+      hadOpaqueBackground: asset.hadOpaqueBackground,
+      croppedWidth: asset.width,
+      croppedHeight: asset.height,
+    };
   }
 
   /**
    * Executes one full AR rendering pass for the garment overlay layer.
    * Layered architecture:
-   *  - Layer 0: Webcam video (rendered natively via <video> behind canvas)
-   *  - Layer 1: Garment overlay (rendered here)
+   *  - Layer 0: Camera background (<video> behind canvas, pixel-locked to same object-cover projection)
+   *  - Layer 1: Garment overlay (rendered here using tightly cropped transparent canvas)
    *  - Layer 2: Optional skeleton / future foreground occlusion
    */
   renderFrame(params: RenderFrameParams): { rendered: boolean; latencyMs: number } {
@@ -87,20 +118,21 @@ export class VirtualTryOnEngine {
       return { rendered: false, latencyMs: 0 };
     }
 
-    // Ensure garment image is ready synchronously (no per-frame decoding)
+    // Ensure garment asset is ready synchronously (no per-frame decoding or cropping)
     if (this.activeGarmentId !== garment.id) {
       void this.setActiveGarment(garment);
     }
 
-    const img = this.activeImage || garmentLoader.getCachedImage(garment);
-    if (!img || !img.complete || img.naturalWidth === 0) {
+    const asset = this.activeAsset || garmentLoader.getCachedAsset(garment);
+    if (!asset || asset.width === 0 || asset.height === 0) {
       return { rendered: false, latencyMs: 0 };
     }
 
-    // 1. Body-to-Clothing Mapping
+    // 1. Body-to-Clothing Mapping using cropped asset dimensions & remapped anchors
     const rawTransform = bodyClothingMapper.mapBodyToGarment(
       landmarks,
       garment,
+      asset,
       canvasWidth,
       canvasHeight,
       isMirrored,
@@ -115,7 +147,7 @@ export class VirtualTryOnEngine {
     const smoothedTransform = garmentTransformer.smooth(rawTransform);
 
     // 3. Render garment layer (warped mesh or affine fallback)
-    const rendered = clothingRenderer.renderGarment(ctx, img, smoothedTransform, adjustments);
+    const rendered = clothingRenderer.renderGarment(ctx, asset, smoothedTransform, adjustments);
 
     const latencyMs = performance.now() - start;
     this.lastRenderDurationMs = latencyMs;
@@ -142,7 +174,7 @@ export class VirtualTryOnEngine {
    */
   dispose(): void {
     this.activeGarmentId = null;
-    this.activeImage = null;
+    this.activeAsset = null;
     garmentTransformer.reset();
   }
 }

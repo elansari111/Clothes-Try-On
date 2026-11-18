@@ -4,10 +4,12 @@ export interface Point2D {
 }
 
 export interface TryOnAdjustments {
-  scale: number;      // Default 1.0 (e.g., 0.6 to 1.6)
-  offsetX: number;    // Horizontal pixel offset
-  offsetY: number;    // Vertical pixel offset
-  opacity: number;    // Default 0.96
+  scale: number;            // Overall garment scale (default 1.0, range 0.5..1.6)
+  shoulderWidthScale: number; // Fine-tune shoulder width ratio (default 1.0, range 0.7..1.4)
+  necklineOffsetY: number;  // Fine-tune neckline vertical alignment in px (default 0, range -80..80)
+  offsetX: number;          // Horizontal pixel offset
+  offsetY: number;          // Vertical pixel offset
+  opacity: number;          // Default 0.96
   enableWarping: boolean;
 }
 

@@ -2,8 +2,8 @@ import { GarmentTransform, Point2D } from '../../types/rendering';
 
 /**
  * 2D Triangle-Mesh Affine Warping Engine for Canvas 2D
- * Deforms a garment image seamlessly to fit a dynamic 4-corner body quad
- * using bilinear grid subdivision + exact per-triangle affine transforms.
+ * Deforms a cropped garment asset (HTMLCanvasElement or HTMLImageElement)
+ * seamlessly onto a dynamic 4-corner body quad while preserving alpha transparency.
  */
 export class GarmentWarpingEngine {
   /**
@@ -29,12 +29,12 @@ export class GarmentWarpingEngine {
   }
 
   /**
-   * Draws a single textured triangle from source image coordinates (u0,v0..u2,v2)
+   * Draws a single textured triangle from source coordinates (u0,v0..u2,v2)
    * onto destination canvas coordinates (x0,y0..x2,y2) using an exact affine transform.
    */
   private drawTexturedTriangle(
     ctx: CanvasRenderingContext2D,
-    img: HTMLImageElement,
+    source: CanvasImageSource,
     x0: number,
     y0: number,
     x1: number,
@@ -48,7 +48,6 @@ export class GarmentWarpingEngine {
     u2: number,
     v2: number
   ): void {
-    // Denominator of affine mapping matrix
     const denom = u0 * (v2 - v1) - u1 * v2 + u2 * v1 + (u1 - u2) * v0;
     if (Math.abs(denom) < 1e-4) return;
 
@@ -61,45 +60,76 @@ export class GarmentWarpingEngine {
     const dy =
       (u0 * (v2 * y1 - v1 * y2) + v0 * (u1 * y2 - u2 * y1) + (u2 * v1 - u1 * v2) * y0) / denom;
 
+    // Guard against NaN/Infinity transforms
+    if (!Number.isFinite(m11) || !Number.isFinite(m22) || !Number.isFinite(dx) || !Number.isFinite(dy)) {
+      return;
+    }
+
+    // Expand clipping polygon slightly outward from triangle centroid to eliminate sub-pixel seams
+    const cx = (x0 + x1 + x2) / 3;
+    const cy = (y0 + y1 + y2) / 3;
+    const pad = 0.65;
+
+    const expandPt = (px: number, py: number) => {
+      const vx = px - cx;
+      const vy = py - cy;
+      const len = Math.hypot(vx, vy);
+      if (len < 1e-3) return { x: px, y: py };
+      return { x: px + (vx / len) * pad, y: py + (vy / len) * pad };
+    };
+
+    const e0 = expandPt(x0, y0);
+    const e1 = expandPt(x1, y1);
+    const e2 = expandPt(x2, y2);
+
     ctx.save();
     ctx.beginPath();
-    ctx.moveTo(x0, y0);
-    ctx.lineTo(x1, y1);
-    ctx.lineTo(x2, y2);
+    ctx.moveTo(e0.x, e0.y);
+    ctx.lineTo(e1.x, e1.y);
+    ctx.lineTo(e2.x, e2.y);
     ctx.closePath();
     ctx.clip();
 
     ctx.transform(m11, m12, m21, m22, dx, dy);
-    ctx.drawImage(img, 0, 0);
+    ctx.drawImage(source, 0, 0);
     ctx.restore();
   }
 
   /**
    * Renders the garment warped onto the target 4-point quad using a subdivided triangle mesh.
-   * Subdivision (e.g., 3x3 grid = 18 triangles) eliminates perspective artifacts while running < 1ms.
    */
   renderWarpedMesh(
     ctx: CanvasRenderingContext2D,
-    img: HTMLImageElement,
+    source: HTMLCanvasElement,
     transform: GarmentTransform,
     gridSteps: number = 3
   ): boolean {
-    const imgW = img.naturalWidth;
-    const imgH = img.naturalHeight;
+    const imgW = source.width;
+    const imgH = source.height;
     if (imgW === 0 || imgH === 0) return false;
 
     const { topLeft, topRight, bottomRight, bottomLeft } = transform.targetQuad;
 
-    // Sanity check against degenerate quads
+    // Validate quad geometry against extreme collapse or twist
     const topWidth = Math.hypot(topRight.x - topLeft.x, topRight.y - topLeft.y);
     const botWidth = Math.hypot(bottomRight.x - bottomLeft.x, bottomRight.y - bottomLeft.y);
     const leftHeight = Math.hypot(bottomLeft.x - topLeft.x, bottomLeft.y - topLeft.y);
-    if (topWidth < 10 || botWidth < 10 || leftHeight < 10) {
+    const rightHeight = Math.hypot(bottomRight.x - topRight.x, bottomRight.y - topRight.y);
+
+    if (topWidth < 12 || botWidth < 12 || leftHeight < 12 || rightHeight < 12) {
       return false;
     }
 
-    // Small overlap factor to prevent hairline seams between adjacent triangles
-    const expand = 0.5;
+    // Check quad convexity via cross product sign
+    const cross1 =
+      (topRight.x - topLeft.x) * (bottomRight.y - topRight.y) -
+      (topRight.y - topLeft.y) * (bottomRight.x - topRight.x);
+    const cross2 =
+      (bottomLeft.x - bottomRight.x) * (topLeft.y - bottomLeft.y) -
+      (bottomLeft.y - bottomRight.y) * (topLeft.x - bottomLeft.x);
+    if (cross1 <= 0 || cross2 <= 0) {
+      return false;
+    }
 
     for (let row = 0; row < gridSteps; row++) {
       const v0 = row / gridSteps;
@@ -122,13 +152,13 @@ export class GarmentWarpingEngine {
         // Triangle 1: p00 -> p10 -> p11
         this.drawTexturedTriangle(
           ctx,
-          img,
-          p00.x - expand,
-          p00.y - expand,
-          p10.x + expand,
-          p10.y - expand,
-          p11.x + expand,
-          p11.y + expand,
+          source,
+          p00.x,
+          p00.y,
+          p10.x,
+          p10.y,
+          p11.x,
+          p11.y,
           su0,
           sv0,
           su1,
@@ -140,13 +170,13 @@ export class GarmentWarpingEngine {
         // Triangle 2: p00 -> p11 -> p01
         this.drawTexturedTriangle(
           ctx,
-          img,
-          p00.x - expand,
-          p00.y - expand,
-          p11.x + expand,
-          p11.y + expand,
-          p01.x - expand,
-          p01.y + expand,
+          source,
+          p00.x,
+          p00.y,
+          p11.x,
+          p11.y,
+          p01.x,
+          p01.y,
           su0,
           sv0,
           su1,
@@ -165,14 +195,14 @@ export class GarmentWarpingEngine {
    */
   renderAffineFallback(
     ctx: CanvasRenderingContext2D,
-    img: HTMLImageElement,
+    source: HTMLCanvasElement,
     transform: GarmentTransform
   ): void {
     ctx.save();
     ctx.translate(transform.centerX, transform.centerY);
     ctx.rotate(transform.rotationRad);
     ctx.drawImage(
-      img,
+      source,
       -transform.width / 2,
       -transform.height / 2,
       transform.width,

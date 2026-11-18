@@ -3,6 +3,7 @@ import { ClothingItem } from './types/clothing';
 import { TryOnAdjustments } from './types/rendering';
 import { ClothingService } from './services/product-importer/clothingService';
 import { ClothingImportModal } from './components/Clothing/ClothingImportModal';
+import { GarmentCleanupModal } from './components/Clothing/GarmentCleanupModal';
 import { useCamera } from './hooks/useCamera';
 import { usePoseTracking } from './hooks/usePoseTracking';
 import { virtualTryOnEngine } from './engines/rendering/virtualTryOnEngine';
@@ -26,10 +27,13 @@ import {
   Eye,
   EyeOff,
   RotateCcw,
+  Eraser,
 } from 'lucide-react';
 
 const INITIAL_ADJUSTMENTS: TryOnAdjustments = {
   scale: 1.0,
+  shoulderWidthScale: 1.0,
+  necklineOffsetY: 0,
   offsetX: 0,
   offsetY: 0,
   opacity: 0.96,
@@ -47,6 +51,7 @@ export const App: React.FC = () => {
   const [filter, setFilter] = useState<string>('All');
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [showImportModal, setShowImportModal] = useState<boolean>(false);
+  const [showCleanupModal, setShowCleanupModal] = useState<boolean>(false);
   const [showSkeleton, setShowSkeleton] = useState<boolean>(false);
   const [showGarment, setShowGarment] = useState<boolean>(true);
   const [adjustments, setAdjustments] = useState<TryOnAdjustments>(INITIAL_ADJUSTMENTS);
@@ -77,6 +82,7 @@ export const App: React.FC = () => {
     renderLatencyMs,
     confidence,
     measurements,
+    assetStatus,
   } = usePoseTracking({
     videoRef,
     canvasRef,
@@ -410,8 +416,23 @@ export const App: React.FC = () => {
                   className="w-11 h-11 rounded-lg object-contain bg-[#1c2233] border border-[#2d354b]"
                 />
                 <div>
-                  <span className="text-[10px] uppercase tracking-wider text-indigo-400 font-semibold">
-                    Vêtement actif {selectedGarment.isCustom && '• Importé'}
+                  <span className="text-[10px] uppercase tracking-wider text-indigo-400 font-semibold flex items-center gap-1.5">
+                    <span>Vêtement actif {selectedGarment.isCustom && '• Importé'}</span>
+                    {assetStatus && assetStatus.hangerRemoved && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/25 normal-case">
+                        Cintre retiré
+                      </span>
+                    )}
+                    {assetStatus && assetStatus.backgroundRemoved && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 normal-case">
+                        Fond détouré
+                      </span>
+                    )}
+                    {assetStatus && !assetStatus.hasTransparency && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/25 normal-case">
+                        Fond opaque détecté
+                      </span>
+                    )}
                   </span>
                   <div className="text-xs font-bold text-white">{selectedGarment.name}</div>
                   <div className="text-[11px] text-slate-400">{selectedGarment.price}</div>
@@ -419,6 +440,13 @@ export const App: React.FC = () => {
               </div>
 
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowCleanupModal(true)}
+                  className="p-2 rounded-lg bg-[#181d2c] hover:bg-[#20273a] text-slate-300 hover:text-white border border-[#2d354b] transition"
+                  title="Nettoyer le cintre / Calibrer les points d'ancrage"
+                >
+                  <Eraser className="w-4 h-4" />
+                </button>
                 <button
                   onClick={handleResetAdjustments}
                   className="p-2 rounded-lg bg-[#181d2c] hover:bg-[#20273a] text-slate-300 border border-[#2d354b] transition"
@@ -469,22 +497,68 @@ export const App: React.FC = () => {
                   </button>
                 </div>
 
-                {/* Échelle */}
+                {/* Échelle globale */}
                 <div className="space-y-1">
                   <div className="flex justify-between text-[11px]">
-                    <span className="text-slate-300">Échelle</span>
+                    <span className="text-slate-300">Échelle globale</span>
                     <span className="font-mono text-indigo-400">
                       {Math.round(adjustments.scale * 100)}%
                     </span>
                   </div>
                   <input
                     type="range"
-                    min={0.6}
-                    max={1.6}
+                    min={0.5}
+                    max={1.5}
                     step={0.02}
                     value={adjustments.scale}
                     onChange={(e) =>
                       setAdjustments((prev) => ({ ...prev, scale: parseFloat(e.target.value) }))
+                    }
+                    className="w-full h-1.5 bg-[#1e2637] rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                  />
+                </div>
+
+                {/* Largeur des épaules */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-300">Largeur épaules</span>
+                    <span className="font-mono text-indigo-400">
+                      {Math.round(adjustments.shoulderWidthScale * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.7}
+                    max={1.4}
+                    step={0.02}
+                    value={adjustments.shoulderWidthScale}
+                    onChange={(e) =>
+                      setAdjustments((prev) => ({
+                        ...prev,
+                        shoulderWidthScale: parseFloat(e.target.value),
+                      }))
+                    }
+                    className="w-full h-1.5 bg-[#1e2637] rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                  />
+                </div>
+
+                {/* Position de l'encolure (Col) */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-300">Position encolure (Col)</span>
+                    <span className="font-mono text-indigo-400">{adjustments.necklineOffsetY} px</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={-80}
+                    max={80}
+                    step={2}
+                    value={adjustments.necklineOffsetY}
+                    onChange={(e) =>
+                      setAdjustments((prev) => ({
+                        ...prev,
+                        necklineOffsetY: parseInt(e.target.value, 10),
+                      }))
                     }
                     className="w-full h-1.5 bg-[#1e2637] rounded-lg appearance-none cursor-pointer accent-indigo-500"
                   />
@@ -765,6 +839,18 @@ export const App: React.FC = () => {
         isOpen={showImportModal}
         onClose={() => setShowImportModal(false)}
         onImportSuccess={refreshClothes}
+      />
+
+      {/* Modal de nettoyage cintre / édition manuelle du masque et des points d'ancrage */}
+      <GarmentCleanupModal
+        isOpen={showCleanupModal}
+        garment={selectedGarment}
+        onClose={() => setShowCleanupModal(false)}
+        onSaveSuccess={(updatedItem) => {
+          refreshClothes();
+          setSelectedGarment(updatedItem);
+          void virtualTryOnEngine.setActiveGarment(updatedItem, true);
+        }}
       />
     </div>
   );

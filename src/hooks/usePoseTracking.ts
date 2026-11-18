@@ -4,7 +4,7 @@ import { ClothingItem } from '../types/clothing';
 import { TryOnAdjustments } from '../types/rendering';
 import { poseEngineService } from '../engines/pose/poseEngineService';
 import { drawSkeleton } from '../engines/pose/skeletonRenderer';
-import { virtualTryOnEngine } from '../engines/rendering/virtualTryOnEngine';
+import { virtualTryOnEngine, GarmentAssetStatus } from '../engines/rendering/virtualTryOnEngine';
 
 export interface UsePoseTrackingOptions {
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -20,9 +20,11 @@ export interface UsePoseTrackingOptions {
 
 const DEFAULT_ADJUSTMENTS: TryOnAdjustments = {
   scale: 1.0,
+  shoulderWidthScale: 1.0,
+  necklineOffsetY: 0,
   offsetX: 0,
   offsetY: 0,
-  opacity: 0.95,
+  opacity: 0.96,
   enableWarping: true,
 };
 
@@ -42,6 +44,7 @@ export function usePoseTracking({
   const [renderLatencyMs, setRenderLatencyMs] = useState<number>(0);
   const [confidence, setConfidence] = useState<number>(0);
   const [measurements, setMeasurements] = useState<BodyMeasurements | null>(null);
+  const [assetStatus, setAssetStatus] = useState<GarmentAssetStatus | null>(null);
 
   // References for non-react render loop performance (avoids restarting rAF when UI controls change)
   const animFrameIdRef = useRef<number | null>(null);
@@ -68,9 +71,17 @@ export function usePoseTracking({
   // Expose current frame result via ref for zero-latency access by other engines
   const latestFrameResultRef = useRef<PoseFrameResult | null>(null);
 
-  // Preload active garment image asynchronously whenever garment changes (never restarts camera/MediaPipe)
+  // Preload & preprocess active garment asset asynchronously whenever garment changes
   useEffect(() => {
-    void virtualTryOnEngine.setActiveGarment(selectedGarment);
+    let cancelled = false;
+    virtualTryOnEngine.setActiveGarment(selectedGarment).then((info) => {
+      if (!cancelled) {
+        setAssetStatus(info);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedGarment]);
 
   /**
@@ -261,6 +272,7 @@ export function usePoseTracking({
     renderLatencyMs,
     confidence,
     measurements,
+    assetStatus,
     latestFrameResultRef,
   };
 }
