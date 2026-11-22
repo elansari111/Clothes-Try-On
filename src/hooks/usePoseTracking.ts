@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { PoseTrackingStatus, PoseFrameResult, BodyMeasurements, PoseEngineConfig } from '../types/pose';
 import { ClothingItem } from '../types/clothing';
-import { TryOnAdjustments } from '../types/rendering';
+import { TryOnAdjustments, DebugRenderOptions } from '../types/rendering';
 import { poseEngineService } from '../engines/pose/poseEngineService';
 import { drawSkeleton } from '../engines/pose/skeletonRenderer';
 import { virtualTryOnEngine, GarmentAssetStatus } from '../engines/rendering/virtualTryOnEngine';
@@ -16,14 +16,20 @@ export interface UsePoseTrackingOptions {
   selectedGarment?: ClothingItem | null;
   showGarment?: boolean;
   adjustments?: TryOnAdjustments;
+  debugOptions?: DebugRenderOptions;
 }
 
 const DEFAULT_ADJUSTMENTS: TryOnAdjustments = {
   scale: 1.0,
   shoulderWidthScale: 1.0,
+  garmentWidthScale: 1.0,
+  garmentHeightScale: 1.0,
   necklineOffsetY: 0,
   offsetX: 0,
   offsetY: 0,
+  rotationOffsetDeg: 0,
+  meshWarpStrength: 0.8,
+  enableArmOcclusion: false,
   opacity: 0.96,
   enableWarping: true,
 };
@@ -37,6 +43,7 @@ export function usePoseTracking({
   selectedGarment = null,
   showGarment = true,
   adjustments = DEFAULT_ADJUSTMENTS,
+  debugOptions,
 }: UsePoseTrackingOptions) {
   const [status, setStatus] = useState<PoseTrackingStatus>('no_person');
   const [delegate, setDelegate] = useState<'GPU' | 'CPU'>('GPU');
@@ -50,6 +57,7 @@ export function usePoseTracking({
   const animFrameIdRef = useRef<number | null>(null);
   const isRunningRef = useRef<boolean>(false);
   const frameCountRef = useRef<number>(0);
+  const fpsRef = useRef<number>(0);
   const lastFpsCalcTimeRef = useRef<number>(performance.now());
   const consecutiveMissesRef = useRef<number>(0);
   const latencyAccumRef = useRef<number>(0);
@@ -61,12 +69,14 @@ export function usePoseTracking({
   const selectedGarmentRef = useRef<ClothingItem | null>(selectedGarment);
   const showGarmentRef = useRef<boolean>(showGarment);
   const adjustmentsRef = useRef<TryOnAdjustments>(adjustments);
+  const debugOptionsRef = useRef<DebugRenderOptions | undefined>(debugOptions);
 
   isMirroredRef.current = isMirrored;
   showSkeletonRef.current = showSkeleton;
   selectedGarmentRef.current = selectedGarment;
   showGarmentRef.current = showGarment;
   adjustmentsRef.current = adjustments;
+  debugOptionsRef.current = debugOptions;
 
   // Expose current frame result via ref for zero-latency access by other engines
   const latestFrameResultRef = useRef<PoseFrameResult | null>(null);
@@ -158,7 +168,7 @@ export function usePoseTracking({
 
           const activePose = latestFrameResultRef.current;
           if (activePose && activePose.landmarks && activePose.landmarks.length > 0) {
-            // LAYER 1: Virtual Try-On Garment Overlay
+            // LAYER 1: Virtual Try-On Garment Overlay + Arm Occlusion + Debug Overlay
             const tryOnRes = virtualTryOnEngine.renderFrame({
               ctx,
               canvasWidth: canvas.width,
@@ -168,6 +178,10 @@ export function usePoseTracking({
               isMirrored: isMirroredRef.current,
               showGarment: showGarmentRef.current,
               adjustments: adjustmentsRef.current,
+              video,
+              debugOptions: debugOptionsRef.current,
+              confidence: activePose.confidence,
+              fps: fpsRef.current,
             });
 
             if (tryOnRes.rendered) {
@@ -175,8 +189,8 @@ export function usePoseTracking({
               latencySamplesRef.current += 1;
             }
 
-            // LAYER 2: Optional Skeleton Visualization
-            if (showSkeletonRef.current) {
+            // LAYER 2: Standalone Skeleton Visualization (when not already drawn by debug overlay)
+            if (showSkeletonRef.current && !debugOptionsRef.current?.showSkeleton) {
               drawSkeleton(ctx, activePose.landmarks, canvas.width, canvas.height, {
                 isMirrored: isMirroredRef.current,
                 showLandmarks: true,
@@ -190,7 +204,9 @@ export function usePoseTracking({
         frameCountRef.current++;
         const now = performance.now();
         if (now - lastFpsCalcTimeRef.current >= 1000) {
-          setFps(Math.round((frameCountRef.current * 1000) / (now - lastFpsCalcTimeRef.current)));
+          const calculatedFps = Math.round((frameCountRef.current * 1000) / (now - lastFpsCalcTimeRef.current));
+          fpsRef.current = calculatedFps;
+          setFps(calculatedFps);
           if (latencySamplesRef.current > 0) {
             setRenderLatencyMs(
               Math.round((latencyAccumRef.current / latencySamplesRef.current) * 10) / 10

@@ -73,6 +73,8 @@ export class GarmentLoader {
         Math.abs(a.rightShoulder.x - 0.8) < 0.005 &&
         Math.abs(a.leftShoulder.y - 0.15) < 0.005;
 
+      const armpitLineY = geometry.shoulderLineY + (geometry.bottomY - geometry.shoulderLineY) * 0.28;
+
       if (isDefault) {
         return {
           leftShoulder: { x: geometry.shoulderLeftX, y: geometry.shoulderLineY },
@@ -81,6 +83,8 @@ export class GarmentLoader {
             x: (geometry.shoulderLeftX + geometry.shoulderRightX) / 2,
             y: geometry.neckCenterY,
           },
+          leftArmpit: { x: geometry.torsoLeftX, y: armpitLineY },
+          rightArmpit: { x: geometry.torsoRightX, y: armpitLineY },
           leftBottom: { x: geometry.torsoLeftX, y: geometry.bottomY },
           rightBottom: { x: geometry.torsoRightX, y: geometry.bottomY },
         };
@@ -90,6 +94,12 @@ export class GarmentLoader {
         leftShoulder: this.remapPoint(a.leftShoulder, origW, origH, crop),
         rightShoulder: this.remapPoint(a.rightShoulder, origW, origH, crop),
         neckCenter: this.remapPoint(a.neckCenter, origW, origH, crop),
+        leftArmpit: a.leftArmpit
+          ? this.remapPoint(a.leftArmpit, origW, origH, crop)
+          : { x: geometry.torsoLeftX, y: armpitLineY },
+        rightArmpit: a.rightArmpit
+          ? this.remapPoint(a.rightArmpit, origW, origH, crop)
+          : { x: geometry.torsoRightX, y: armpitLineY },
         leftBottom: this.remapPoint(a.leftBottom, origW, origH, crop),
         rightBottom: this.remapPoint(a.rightBottom, origW, origH, crop),
       };

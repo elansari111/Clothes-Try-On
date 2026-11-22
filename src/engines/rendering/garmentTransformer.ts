@@ -65,6 +65,8 @@ export class GarmentTransformer {
         ),
       },
       sourceQuad: target.sourceQuad,
+      anchorPoints: target.anchorPoints,
+      bodyReferences: target.bodyReferences,
       isValid: target.isValid,
     };
 

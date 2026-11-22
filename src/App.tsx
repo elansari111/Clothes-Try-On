@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ClothingItem } from './types/clothing';
-import { TryOnAdjustments } from './types/rendering';
+import { ClothingItem, GarmentCalibration } from './types/clothing';
+import { TryOnAdjustments, DebugRenderOptions } from './types/rendering';
 import { ClothingService } from './services/product-importer/clothingService';
 import { ClothingImportModal } from './components/Clothing/ClothingImportModal';
 import { GarmentCleanupModal } from './components/Clothing/GarmentCleanupModal';
@@ -28,16 +28,24 @@ import {
   EyeOff,
   RotateCcw,
   Eraser,
+  Bug,
+  Save,
+  Check,
 } from 'lucide-react';
 
 const INITIAL_ADJUSTMENTS: TryOnAdjustments = {
   scale: 1.0,
   shoulderWidthScale: 1.0,
+  garmentWidthScale: 1.0,
+  garmentHeightScale: 1.0,
   necklineOffsetY: 0,
   offsetX: 0,
   offsetY: 0,
+  rotationOffsetDeg: 0,
+  meshWarpStrength: 0.8,
   opacity: 0.96,
   enableWarping: true,
+  enableArmOcclusion: false,
 };
 
 export const App: React.FC = () => {
@@ -55,6 +63,19 @@ export const App: React.FC = () => {
   const [showSkeleton, setShowSkeleton] = useState<boolean>(false);
   const [showGarment, setShowGarment] = useState<boolean>(true);
   const [adjustments, setAdjustments] = useState<TryOnAdjustments>(INITIAL_ADJUSTMENTS);
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState<string>('');
+  const [showDebugDrawer, setShowDebugDrawer] = useState<boolean>(false);
+  const [debugOptions, setDebugOptions] = useState<DebugRenderOptions>({
+    showSkeleton: false,
+    showLandmarks: false,
+    showReferenceLines: false,
+    showGarmentAnchors: false,
+    showBoundingBox: false,
+    showMeshWireframe: false,
+    showTransformCenter: false,
+    showConfidence: false,
+    showArmOcclusion: false,
+  });
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -92,6 +113,7 @@ export const App: React.FC = () => {
     selectedGarment,
     showGarment,
     adjustments,
+    debugOptions,
   });
 
   const categories = ['All', 'T-Shirts', 'Shirts', 'Jackets', 'Pants', 'Other'];
@@ -122,8 +144,74 @@ export const App: React.FC = () => {
   };
 
   const handleResetAdjustments = () => {
-    setAdjustments(INITIAL_ADJUSTMENTS);
+    if (selectedGarment?.calibration) {
+      setAdjustments({
+        scale: selectedGarment.calibration.scale ?? 1.0,
+        shoulderWidthScale: selectedGarment.calibration.shoulderWidthScale ?? 1.0,
+        garmentWidthScale: selectedGarment.calibration.garmentWidthScale ?? 1.0,
+        garmentHeightScale: selectedGarment.calibration.garmentHeightScale ?? 1.0,
+        necklineOffsetY: selectedGarment.calibration.necklineOffsetY ?? 0,
+        offsetX: selectedGarment.calibration.offsetX ?? 0,
+        offsetY: selectedGarment.calibration.offsetY ?? 0,
+        rotationOffsetDeg: selectedGarment.calibration.rotationOffsetDeg ?? 0,
+        meshWarpStrength: selectedGarment.calibration.meshWarpStrength ?? 0.8,
+        opacity: selectedGarment.calibration.opacity ?? 0.96,
+        enableWarping: selectedGarment.calibration.enableWarping ?? true,
+        enableArmOcclusion: selectedGarment.calibration.enableArmOcclusion ?? false,
+      });
+    } else {
+      setAdjustments(INITIAL_ADJUSTMENTS);
+    }
     virtualTryOnEngine.resetTransform();
+  };
+
+  // Load per-garment calibration when selectedGarment changes
+  useEffect(() => {
+    if (!selectedGarment) return;
+    if (selectedGarment.calibration) {
+      setAdjustments({
+        scale: selectedGarment.calibration.scale ?? 1.0,
+        shoulderWidthScale: selectedGarment.calibration.shoulderWidthScale ?? 1.0,
+        garmentWidthScale: selectedGarment.calibration.garmentWidthScale ?? 1.0,
+        garmentHeightScale: selectedGarment.calibration.garmentHeightScale ?? 1.0,
+        necklineOffsetY: selectedGarment.calibration.necklineOffsetY ?? 0,
+        offsetX: selectedGarment.calibration.offsetX ?? 0,
+        offsetY: selectedGarment.calibration.offsetY ?? 0,
+        rotationOffsetDeg: selectedGarment.calibration.rotationOffsetDeg ?? 0,
+        meshWarpStrength: selectedGarment.calibration.meshWarpStrength ?? 0.8,
+        opacity: selectedGarment.calibration.opacity ?? 0.96,
+        enableWarping: selectedGarment.calibration.enableWarping ?? true,
+        enableArmOcclusion: selectedGarment.calibration.enableArmOcclusion ?? false,
+      });
+    } else {
+      setAdjustments(INITIAL_ADJUSTMENTS);
+    }
+    virtualTryOnEngine.resetTransform();
+  }, [selectedGarment?.id]);
+
+  const handleSaveCalibration = () => {
+    if (!selectedGarment) return;
+    const calib: GarmentCalibration = {
+      scale: adjustments.scale,
+      shoulderWidthScale: adjustments.shoulderWidthScale,
+      garmentWidthScale: adjustments.garmentWidthScale ?? 1.0,
+      garmentHeightScale: adjustments.garmentHeightScale ?? 1.0,
+      necklineOffsetY: adjustments.necklineOffsetY,
+      offsetX: adjustments.offsetX,
+      offsetY: adjustments.offsetY,
+      rotationOffsetDeg: adjustments.rotationOffsetDeg ?? 0,
+      meshWarpStrength: adjustments.meshWarpStrength ?? 0.8,
+      opacity: adjustments.opacity,
+      enableWarping: adjustments.enableWarping,
+      enableArmOcclusion: adjustments.enableArmOcclusion ?? false,
+    };
+    const updated = ClothingService.saveCalibration(selectedGarment.id, calib);
+    setClothesList(updated);
+    const updatedGarment = updated.find((c) => c.id === selectedGarment.id);
+    if (updatedGarment) setSelectedGarment(updatedGarment);
+
+    setSaveSuccessMessage('Calibration sauvegardée !');
+    setTimeout(() => setSaveSuccessMessage(''), 2500);
   };
 
   // Sync selectedGarment if empty
@@ -325,6 +413,19 @@ export const App: React.FC = () => {
                 <Scan className="w-4 h-4" />
               </button>
 
+              {/* Mode Développeur / Diagnostics */}
+              <button
+                onClick={() => setShowDebugDrawer((prev) => !prev)}
+                className={`p-2 rounded-xl backdrop-blur-md border transition ${
+                  showDebugDrawer
+                    ? 'bg-amber-500/80 text-white border-amber-400 shadow-md shadow-amber-500/20'
+                    : 'bg-[#0d0f15]/80 text-slate-300 hover:text-white border-[#222838]'
+                }`}
+                title="Mode Développeur : Diagnostics, Repères & Wireframe"
+              >
+                <Bug className="w-4 h-4" />
+              </button>
+
               {/* Mode Miroir (Selfie) */}
               <button
                 onClick={toggleMirror}
@@ -355,6 +456,86 @@ export const App: React.FC = () => {
               >
                 <CameraOff className="w-4 h-4" />
               </button>
+            </div>
+          )}
+
+          {/* Panneau Développeur / Diagnostics Overlay */}
+          {cameraStatus === 'active' && showDebugDrawer && (
+            <div className="absolute top-16 right-4 w-80 max-h-[75%] overflow-y-auto bg-[#10141f]/95 backdrop-blur-md border border-[#2b354d] rounded-2xl p-4 shadow-2xl z-20 space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-[#1e2637]">
+                <div className="flex items-center gap-2">
+                  <Bug className="w-4 h-4 text-amber-400" />
+                  <span className="text-xs font-bold text-white">Diagnostics & Repères</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      const allEnabled = Object.values(debugOptions).every(Boolean);
+                      setDebugOptions({
+                        showSkeleton: !allEnabled,
+                        showLandmarks: !allEnabled,
+                        showReferenceLines: !allEnabled,
+                        showGarmentAnchors: !allEnabled,
+                        showBoundingBox: !allEnabled,
+                        showMeshWireframe: !allEnabled,
+                        showTransformCenter: !allEnabled,
+                        showConfidence: !allEnabled,
+                        showArmOcclusion: !allEnabled,
+                      });
+                    }}
+                    className="text-[10px] text-amber-400 hover:text-amber-300 font-semibold underline"
+                  >
+                    {Object.values(debugOptions).every(Boolean) ? 'Tout masquer' : 'Tout activer'}
+                  </button>
+                  <button
+                    onClick={() => setShowDebugDrawer(false)}
+                    className="text-slate-400 hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-1.5 text-xs">
+                {[
+                  { key: 'showLandmarks', label: 'Repères 33 numérotés' },
+                  { key: 'showReferenceLines', label: 'Lignes anatomiques (épaules, col, hanches)' },
+                  { key: 'showGarmentAnchors', label: 'Points ancrage vêtement (diamants)' },
+                  { key: 'showBoundingBox', label: 'Boîte englobante (quad délimité)' },
+                  { key: 'showMeshWireframe', label: 'Maillage triangulaire (wireframe)' },
+                  { key: 'showTransformCenter', label: 'Centre & angle de rotation' },
+                  { key: 'showConfidence', label: 'Télémétrie HUD & Score confiance' },
+                  { key: 'showArmOcclusion', label: 'Zones occlusion des bras' },
+                  { key: 'showSkeleton', label: 'Squelette complet MediaPipe' },
+                ].map(({ key, label }) => {
+                  const isChecked = !!debugOptions[key as keyof DebugRenderOptions];
+                  return (
+                    <div
+                      key={key}
+                      onClick={() =>
+                        setDebugOptions((prev) => ({
+                          ...prev,
+                          [key]: !prev[key as keyof DebugRenderOptions],
+                        }))
+                      }
+                      className="flex items-center justify-between p-2 rounded-lg bg-[#151a28] hover:bg-[#1a2233] cursor-pointer transition"
+                    >
+                      <span className="text-[11px] text-slate-200">{label}</span>
+                      <div
+                        className={`w-8 h-4 rounded-full relative transition ${
+                          isChecked ? 'bg-amber-500' : 'bg-[#273044]'
+                        }`}
+                      >
+                        <span
+                          className={`w-3 h-3 bg-white rounded-full absolute top-0.5 transition-all ${
+                            isChecked ? 'right-0.5' : 'left-0.5'
+                          }`}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
@@ -542,6 +723,54 @@ export const App: React.FC = () => {
                   />
                 </div>
 
+                {/* Largeur du vêtement */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-300">Largeur vêtement</span>
+                    <span className="font-mono text-indigo-400">
+                      {Math.round((adjustments.garmentWidthScale ?? 1.0) * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.7}
+                    max={1.4}
+                    step={0.02}
+                    value={adjustments.garmentWidthScale ?? 1.0}
+                    onChange={(e) =>
+                      setAdjustments((prev) => ({
+                        ...prev,
+                        garmentWidthScale: parseFloat(e.target.value),
+                      }))
+                    }
+                    className="w-full h-1.5 bg-[#1e2637] rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                  />
+                </div>
+
+                {/* Hauteur du vêtement */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-300">Longueur vêtement</span>
+                    <span className="font-mono text-indigo-400">
+                      {Math.round((adjustments.garmentHeightScale ?? 1.0) * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.7}
+                    max={1.4}
+                    step={0.02}
+                    value={adjustments.garmentHeightScale ?? 1.0}
+                    onChange={(e) =>
+                      setAdjustments((prev) => ({
+                        ...prev,
+                        garmentHeightScale: parseFloat(e.target.value),
+                      }))
+                    }
+                    className="w-full h-1.5 bg-[#1e2637] rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                  />
+                </div>
+
                 {/* Position de l'encolure (Col) */}
                 <div className="space-y-1">
                   <div className="flex justify-between text-[11px]">
@@ -558,6 +787,28 @@ export const App: React.FC = () => {
                       setAdjustments((prev) => ({
                         ...prev,
                         necklineOffsetY: parseInt(e.target.value, 10),
+                      }))
+                    }
+                    className="w-full h-1.5 bg-[#1e2637] rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                  />
+                </div>
+
+                {/* Rotation fine (°deg) */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-300">Rotation manuelle</span>
+                    <span className="font-mono text-indigo-400">{adjustments.rotationOffsetDeg ?? 0}°</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={-30}
+                    max={30}
+                    step={1}
+                    value={adjustments.rotationOffsetDeg ?? 0}
+                    onChange={(e) =>
+                      setAdjustments((prev) => ({
+                        ...prev,
+                        rotationOffsetDeg: parseInt(e.target.value, 10),
                       }))
                     }
                     className="w-full h-1.5 bg-[#1e2637] rounded-lg appearance-none cursor-pointer accent-indigo-500"
@@ -602,6 +853,52 @@ export const App: React.FC = () => {
                   />
                 </div>
 
+                {/* Force de déformation du maillage (Mesh Warp Strength) */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-300">Force de déformation maillage</span>
+                    <span className="font-mono text-indigo-400">
+                      {Math.round((adjustments.meshWarpStrength ?? 0.8) * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.0}
+                    max={1.0}
+                    step={0.05}
+                    value={adjustments.meshWarpStrength ?? 0.8}
+                    onChange={(e) =>
+                      setAdjustments((prev) => ({
+                        ...prev,
+                        meshWarpStrength: parseFloat(e.target.value),
+                      }))
+                    }
+                    className="w-full h-1.5 bg-[#1e2637] rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                  />
+                </div>
+
+                {/* Toggle Occlusion avant-plan des bras */}
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-xs text-slate-300">Occlusion des bras (premier plan)</span>
+                  <button
+                    onClick={() =>
+                      setAdjustments((prev) => ({
+                        ...prev,
+                        enableArmOcclusion: !prev.enableArmOcclusion,
+                      }))
+                    }
+                    className={`w-9 h-5 rounded-full relative transition ${
+                      adjustments.enableArmOcclusion ? 'bg-indigo-600' : 'bg-[#273044]'
+                    }`}
+                  >
+                    <span
+                      className={`w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 transition-all ${
+                        adjustments.enableArmOcclusion ? 'right-1' : 'left-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+
                 {/* Toggle Déformation 2D (Warping) */}
                 <div className="flex items-center justify-between pt-1">
                   <span className="text-xs text-slate-300">Déformation 2D (Mesh Warp)</span>
@@ -636,6 +933,23 @@ export const App: React.FC = () => {
                       }`}
                     />
                   </button>
+                </div>
+
+                {/* Bouton Sauvegarder pour ce vêtement */}
+                <div className="pt-2">
+                  <button
+                    onClick={handleSaveCalibration}
+                    className="w-full py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition shadow-md shadow-indigo-600/20"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Sauvegarder pour ce vêtement</span>
+                  </button>
+                  {saveSuccessMessage && (
+                    <div className="mt-2 text-[11px] text-emerald-400 font-medium flex items-center justify-center gap-1">
+                      <Check className="w-3.5 h-3.5" />
+                      <span>{saveSuccessMessage}</span>
+                    </div>
+                  )}
                 </div>
               </div>
 

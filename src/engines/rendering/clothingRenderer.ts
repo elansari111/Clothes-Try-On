@@ -25,7 +25,8 @@ export class ClothingRenderer {
 
     let warped = false;
     if (adjustments.enableWarping) {
-      warped = garmentWarpingEngine.renderWarpedMesh(ctx, asset.source, transform, 3);
+      const warpStrength = adjustments.meshWarpStrength ?? 0.8;
+      warped = garmentWarpingEngine.renderWarpedMesh(ctx, asset.source, transform, 3, warpStrength);
     }
 
     if (!warped) {

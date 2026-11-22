@@ -1,4 +1,4 @@
-import { ClothingItem } from '../../types/clothing';
+import { ClothingItem, GarmentCalibration } from '../../types/clothing';
 import { CLOTHES } from '../../types';
 import { garmentAnchorService } from '../../engines/clothing/garmentAnchorService';
 
@@ -70,6 +70,13 @@ export class ClothingStorage {
     const updated = current.map((item) => (item.id === id ? { ...item, ...updates } : item));
     this.saveAll(updated);
     return updated;
+  }
+
+  /**
+   * Persists per-garment calibration adjustments
+   */
+  static saveCalibration(id: string, calibration: GarmentCalibration): ClothingItem[] {
+    return this.update(id, { calibration });
   }
 
   /**

@@ -1,9 +1,9 @@
 import { GarmentTransform, Point2D } from '../../types/rendering';
 
 /**
- * 2D Triangle-Mesh Affine Warping Engine for Canvas 2D
+ * 2D Triangle-Mesh Warping Engine for Canvas 2D
  * Deforms a cropped garment asset (HTMLCanvasElement or HTMLImageElement)
- * seamlessly onto a dynamic 4-corner body quad while preserving alpha transparency.
+ * seamlessly onto a dynamic body quad while preserving alpha transparency and aspect ratio.
  */
 export class GarmentWarpingEngine {
   /**
@@ -60,7 +60,7 @@ export class GarmentWarpingEngine {
     const dy =
       (u0 * (v2 * y1 - v1 * y2) + v0 * (u1 * y2 - u2 * y1) + (u2 * v1 - u1 * v2) * y0) / denom;
 
-    // Guard against NaN/Infinity transforms
+    // Guard against non-finite values
     if (!Number.isFinite(m11) || !Number.isFinite(m22) || !Number.isFinite(dx) || !Number.isFinite(dy)) {
       return;
     }
@@ -96,38 +96,78 @@ export class GarmentWarpingEngine {
   }
 
   /**
-   * Renders the garment warped onto the target 4-point quad using a subdivided triangle mesh.
+   * Computes the blended destination quad between rigid affine bounds and perspective target quad
+   * based on meshWarpStrength (0 = purely rigid, 1 = full contour warp).
+   */
+  private getBlendedQuad(
+    transform: GarmentTransform,
+    warpStrength: number = 0.8
+  ): { topLeft: Point2D; topRight: Point2D; bottomRight: Point2D; bottomLeft: Point2D } {
+    const { centerX, centerY, width, height, rotationRad, targetQuad } = transform;
+    const cosA = Math.cos(rotationRad);
+    const sinA = Math.sin(rotationRad);
+    const halfW = width / 2;
+    const halfH = height / 2;
+
+    // Rigid unwarped bounding box corners
+    const rigidTL: Point2D = {
+      x: centerX - halfW * cosA + halfH * sinA,
+      y: centerY - halfW * sinA - halfH * cosA,
+    };
+    const rigidTR: Point2D = {
+      x: centerX + halfW * cosA + halfH * sinA,
+      y: centerY + halfW * sinA - halfH * cosA,
+    };
+    const rigidBR: Point2D = {
+      x: centerX + halfW * cosA - halfH * sinA,
+      y: centerY + halfW * sinA + halfH * cosA,
+    };
+    const rigidBL: Point2D = {
+      x: centerX - halfW * cosA - halfH * sinA,
+      y: centerY - halfW * sinA + halfH * cosA,
+    };
+
+    const s = Math.max(0, Math.min(1, warpStrength));
+    if (s <= 0.02) {
+      return { topLeft: rigidTL, topRight: rigidTR, bottomRight: rigidBR, bottomLeft: rigidBL };
+    }
+
+    const lerpP = (pA: Point2D, pB: Point2D): Point2D => ({
+      x: pA.x + (pB.x - pA.x) * s,
+      y: pA.y + (pB.y - pA.y) * s,
+    });
+
+    return {
+      topLeft: lerpP(rigidTL, targetQuad.topLeft),
+      topRight: lerpP(rigidTR, targetQuad.topRight),
+      bottomRight: lerpP(rigidBR, targetQuad.bottomRight),
+      bottomLeft: lerpP(rigidBL, targetQuad.bottomLeft),
+    };
+  }
+
+  /**
+   * Renders the garment warped onto the target quad using a subdivided triangle mesh.
    */
   renderWarpedMesh(
     ctx: CanvasRenderingContext2D,
     source: HTMLCanvasElement,
     transform: GarmentTransform,
-    gridSteps: number = 3
+    gridSteps: number = 3,
+    warpStrength: number = 0.8
   ): boolean {
     const imgW = source.width;
     const imgH = source.height;
     if (imgW === 0 || imgH === 0) return false;
 
-    const { topLeft, topRight, bottomRight, bottomLeft } = transform.targetQuad;
+    const { topLeft, topRight, bottomRight, bottomLeft } = this.getBlendedQuad(transform, warpStrength);
 
-    // Validate quad geometry against extreme collapse or twist
+    // Validate geometry against extreme collapse
     const topWidth = Math.hypot(topRight.x - topLeft.x, topRight.y - topLeft.y);
     const botWidth = Math.hypot(bottomRight.x - bottomLeft.x, bottomRight.y - bottomLeft.y);
     const leftHeight = Math.hypot(bottomLeft.x - topLeft.x, bottomLeft.y - topLeft.y);
     const rightHeight = Math.hypot(bottomRight.x - topRight.x, bottomRight.y - topRight.y);
 
     if (topWidth < 12 || botWidth < 12 || leftHeight < 12 || rightHeight < 12) {
-      return false;
-    }
-
-    // Check quad convexity via cross product sign
-    const cross1 =
-      (topRight.x - topLeft.x) * (bottomRight.y - topRight.y) -
-      (topRight.y - topLeft.y) * (bottomRight.x - topRight.x);
-    const cross2 =
-      (bottomLeft.x - bottomRight.x) * (topLeft.y - bottomLeft.y) -
-      (bottomLeft.y - bottomRight.y) * (topLeft.x - bottomLeft.x);
-    if (cross1 <= 0 || cross2 <= 0) {
       return false;
     }
 
@@ -191,13 +231,17 @@ export class GarmentWarpingEngine {
   }
 
   /**
-   * Stable affine transformation fallback (center, rotate, scale)
+   * Fallback: rigid center-aligned affine rendering
    */
   renderAffineFallback(
     ctx: CanvasRenderingContext2D,
     source: HTMLCanvasElement,
     transform: GarmentTransform
   ): void {
+    const imgW = source.width;
+    const imgH = source.height;
+    if (imgW === 0 || imgH === 0) return;
+
     ctx.save();
     ctx.translate(transform.centerX, transform.centerY);
     ctx.rotate(transform.rotationRad);
@@ -208,6 +252,54 @@ export class GarmentWarpingEngine {
       transform.width,
       transform.height
     );
+    ctx.restore();
+  }
+
+  /**
+   * Draws the mesh wireframe in developer debug mode.
+   */
+  renderWireframe(
+    ctx: CanvasRenderingContext2D,
+    transform: GarmentTransform,
+    gridSteps: number = 3,
+    warpStrength: number = 0.8
+  ): void {
+    const { topLeft, topRight, bottomRight, bottomLeft } = this.getBlendedQuad(transform, warpStrength);
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(249, 115, 22, 0.75)'; // Orange-500
+    ctx.lineWidth = 1.2;
+
+    for (let row = 0; row < gridSteps; row++) {
+      const v0 = row / gridSteps;
+      const v1 = (row + 1) / gridSteps;
+
+      for (let col = 0; col < gridSteps; col++) {
+        const u0 = col / gridSteps;
+        const u1 = (col + 1) / gridSteps;
+
+        const p00 = this.bilerpQuad(topLeft, topRight, bottomRight, bottomLeft, u0, v0);
+        const p10 = this.bilerpQuad(topLeft, topRight, bottomRight, bottomLeft, u1, v0);
+        const p11 = this.bilerpQuad(topLeft, topRight, bottomRight, bottomLeft, u1, v1);
+        const p01 = this.bilerpQuad(topLeft, topRight, bottomRight, bottomLeft, u0, v1);
+
+        // Quad borders
+        ctx.beginPath();
+        ctx.moveTo(p00.x, p00.y);
+        ctx.lineTo(p10.x, p10.y);
+        ctx.lineTo(p11.x, p11.y);
+        ctx.lineTo(p01.x, p01.y);
+        ctx.closePath();
+        ctx.stroke();
+
+        // Diagonal split
+        ctx.beginPath();
+        ctx.moveTo(p00.x, p00.y);
+        ctx.lineTo(p11.x, p11.y);
+        ctx.stroke();
+      }
+    }
+
     ctx.restore();
   }
 }

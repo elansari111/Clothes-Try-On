@@ -24,11 +24,13 @@ export class BodyClothingMapper {
 
   /**
    * Maps upper body landmarks (Shoulders, Hips, Neck base) to an Upper Body garment.
-   * Key alignment guarantees:
-   *  1. Garment neckline aligns directly with the user's neck base (slightly above shoulder midpoint).
+   * Key precision guarantees:
+   *  1. Garment neckline aligns directly with the user's neck base (suprasternal notch) without covering chin/face.
    *  2. Garment left/right shoulder anchors align with body left/right shoulders without oversizing.
-   *  3. Garment width is scaled proportionally to torso/shoulder width (sleeves never bloat width).
-   *  4. Torso center, height, and shoulder rotation drive the transform continuously.
+   *  3. Torso center, height, and shoulder rotation drive the transform continuously.
+   *  4. Per-garment calibration parameters (garmentWidthScale, garmentHeightScale, rotationOffsetDeg, necklineOffsetY)
+   *     are accurately applied.
+   *  5. Computes absolute canvas coordinates for all 7 anchor points and anatomical reference lines for debug visualization.
    */
   private mapUpperBody(
     landmarks: NormalizedLandmark[],
@@ -71,9 +73,12 @@ export class BodyClothingMapper {
     if (shoulderDist < 18) return null;
 
     // Upper torso orthogonal basis vectors
-    const rotationRad = Math.atan2(shoulderDy, shoulderDx);
-    const rightUnitX = shoulderDx / shoulderDist;
-    const rightUnitY = shoulderDy / shoulderDist;
+    const baseRotationRad = Math.atan2(shoulderDy, shoulderDx);
+    const rotationOffsetRad = ((adjustments.rotationOffsetDeg ?? 0) * Math.PI) / 180;
+    const rotationRad = baseRotationRad + rotationOffsetRad;
+
+    const rightUnitX = Math.cos(rotationRad);
+    const rightUnitY = Math.sin(rotationRad);
     const perpDownX = -rightUnitY;
     const perpDownY = rightUnitX;
 
@@ -84,17 +89,23 @@ export class BodyClothingMapper {
     };
 
     // Estimate anatomical base of the neck (suprasternal notch / base of collar)
-    // Typically sits ~10-16% of shoulderDist above midShoulder along the spine axis
+    // Sits roughly 12-16% of shoulderDist above midShoulder along the spine axis
     let neckAboveShoulderPx = shoulderDist * 0.13;
+    let pNosePt: Point2D | null = null;
+
     if (lmNose && (lmNose.visibility ?? 0) >= minVis) {
-      const pNose = this.toCanvasPoint(lmNose, canvasWidth, canvasHeight, isMirrored);
-      const noseDist = Math.hypot(midShoulder.x - pNose.x, midShoulder.y - pNose.y);
-      // Base of neck is roughly 20-25% of the way from shoulder midpoint toward the nose
+      pNosePt = this.toCanvasPoint(lmNose, canvasWidth, canvasHeight, isMirrored);
+      const noseDist = Math.hypot(midShoulder.x - pNosePt.x, midShoulder.y - pNosePt.y);
       neckAboveShoulderPx = Math.max(
         shoulderDist * 0.08,
         Math.min(shoulderDist * 0.22, noseDist * 0.22)
       );
     }
+
+    const neckBase: Point2D = {
+      x: midShoulder.x - perpDownX * neckAboveShoulderPx,
+      y: midShoulder.y - perpDownY * neckAboveShoulderPx,
+    };
 
     // Hips visibility & torso proportions
     const hipsVisible =
@@ -126,7 +137,6 @@ export class BodyClothingMapper {
       const dY = midHip.y - midShoulder.y;
       const measuredTorsoH = Math.hypot(dX, dY);
 
-      // Clamp to anatomically plausible human torso ratio (prevents foreshortening spikes)
       torsoHeight = Math.max(shoulderDist * 1.15, Math.min(shoulderDist * 1.95, measuredTorsoH));
       if (measuredTorsoH > 20) {
         downUnitX = dX / measuredTorsoH;
@@ -150,18 +160,26 @@ export class BodyClothingMapper {
     }
 
     // Retrieve garment anchor points in the cropped & hanger-free asset space [0..1]
-    const anchors = asset.remappedAnchors as UpperBodyAnchors;
+    const rawAnchors = asset.remappedAnchors as UpperBodyAnchors;
+    const anchors = garmentAnchorService.ensureUpperBodyAnchors(rawAnchors);
+
     const anchorLeftX = Math.min(anchors.leftShoulder?.x ?? 0.22, anchors.rightShoulder?.x ?? 0.78);
     const anchorRightX = Math.max(anchors.leftShoulder?.x ?? 0.22, anchors.rightShoulder?.x ?? 0.78);
 
-    // Shoulder span inside the cropped image (clamped safely so sleeves never cause extreme oversizing)
+    // Shoulder span inside the cropped image
     const rawShoulderSpan = Math.max(0.38, Math.min(0.86, anchorRightX - anchorLeftX));
 
-    // Also inspect core torso width from silhouette analysis to prevent long-sleeve images from blowing up width
-    const torsoSpan = Math.max(
+    // Core torso width from armpit anchors if available, or silhouette geometry
+    let torsoSpan = Math.max(
       0.32,
       Math.min(0.88, asset.geometry.torsoRightX - asset.geometry.torsoLeftX)
     );
+    if (anchors.leftArmpit && anchors.rightArmpit) {
+      const armpitSpan = Math.abs(anchors.rightArmpit.x - anchors.leftArmpit.x);
+      if (armpitSpan > 0.2) {
+        torsoSpan = armpitSpan;
+      }
+    }
     const effectiveShoulderSpan = Math.max(rawShoulderSpan, torsoSpan * 1.04);
 
     const anchorNeckY = Math.max(0.01, Math.min(0.24, anchors.neckCenter?.y ?? asset.geometry.neckCenterY));
@@ -175,58 +193,67 @@ export class BodyClothingMapper {
     );
     const anchorTorsoVerticalSpan = Math.max(0.5, anchorBottomY - anchorShoulderY);
 
-    // Calibrated category shoulder multipliers (restrained so garments do NOT look oversized!)
-    // MediaPipe shoulder landmarks are at the glenohumeral joint (inside the outer deltoid by ~10-14% total)
-    let shoulderWidthMultiplier = 1.12; // T-Shirts: tailored fit
+    // Category multipliers
+    let shoulderWidthMultiplier = 1.12; // T-Shirts
     let torsoLengthMultiplier = 1.02;
 
     if (item.category === 'Shirts') {
-      shoulderWidthMultiplier = 1.14; // Oxford / dress shirts sit cleanly on shoulder seams
+      shoulderWidthMultiplier = 1.14;
       torsoLengthMultiplier = 1.06;
     } else if (item.category === 'Jackets') {
-      shoulderWidthMultiplier = 1.22; // Jackets have slightly broader outer shoulder padding
+      shoulderWidthMultiplier = 1.22;
       torsoLengthMultiplier = 1.08;
     }
 
-    // 1. Target garment width driven by body shoulder distance & user shoulderWidthScale + overall scale
-    const desiredBodyShoulderPx = shoulderDist * shoulderWidthMultiplier * adjustments.shoulderWidthScale;
+    // Individual scale components
+    const userGarmentWidthScale = adjustments.garmentWidthScale ?? 1.0;
+    const userGarmentHeightScale = adjustments.garmentHeightScale ?? 1.0;
+
+    // 1. Target garment width
+    const desiredBodyShoulderPx =
+      shoulderDist * shoulderWidthMultiplier * adjustments.shoulderWidthScale * userGarmentWidthScale;
     let targetWidth = (desiredBodyShoulderPx / effectiveShoulderSpan) * adjustments.scale;
 
-    // Hard safety cap: garment total image width must stay realistic relative to shoulder distance
-    // (Prevents wide flat-lay images with spread arms from becoming huge)
-    const maxRealisticWidth = shoulderDist * 2.45 * adjustments.scale * adjustments.shoulderWidthScale;
-    const minRealisticWidth = shoulderDist * 1.05 * adjustments.scale * adjustments.shoulderWidthScale;
+    // Safety cap
+    const maxRealisticWidth =
+      shoulderDist * 2.45 * adjustments.scale * adjustments.shoulderWidthScale * userGarmentWidthScale;
+    const minRealisticWidth =
+      shoulderDist * 1.05 * adjustments.scale * adjustments.shoulderWidthScale * userGarmentWidthScale;
     targetWidth = Math.max(minRealisticWidth, Math.min(maxRealisticWidth, targetWidth));
 
-    // 2. Target garment height: balance torso proportions & natural garment aspect ratio
+    // 2. Target garment height
     const torsoDrivenHeight =
-      ((torsoHeight * torsoLengthMultiplier) / anchorTorsoVerticalSpan) * adjustments.scale;
-    const aspectDrivenHeight = targetWidth / Math.max(0.5, Math.min(1.5, asset.aspectRatio));
+      ((torsoHeight * torsoLengthMultiplier) / anchorTorsoVerticalSpan) *
+      adjustments.scale *
+      userGarmentHeightScale;
+    const aspectDrivenHeight = (targetWidth / Math.max(0.5, Math.min(1.5, asset.aspectRatio))) * userGarmentHeightScale;
 
-    // Blend torso length and image natural aspect ratio (60% torso, 40% aspect when hips visible)
     const blendedHeight = hipsVisible
       ? torsoDrivenHeight * 0.6 + aspectDrivenHeight * 0.4
       : aspectDrivenHeight * 0.95;
 
-    // Clamp vertical stretch to +/- 20% of natural aspect ratio so shirt proportions stay crisp
     const targetHeight = Math.max(
       aspectDrivenHeight * 0.8,
       Math.min(aspectDrivenHeight * 1.22, blendedHeight)
     );
 
     // 3. Neckline & Shoulder Vertical Alignment:
-    // Target point for garment's neckCenter (v = anchorNeckY) is the user's neck base:
-    //   bodyNeckBase = midShoulder - downUnit * neckAboveShoulderPx
-    // Target point for garment's shoulder line (v = anchorShoulderY) is midShoulder.
-    // Blend both anchors so collar sits right at the neck base AND shoulders sit on user shoulders.
+    // Garment neckCenter sits at neckBase; garment shoulder line sits at midShoulder.
     const topFromNeckAnchor = neckAboveShoulderPx + anchorNeckY * targetHeight;
     const topFromShoulderAnchor = anchorShoulderY * targetHeight;
     const distTopAboveMidShoulder =
       topFromNeckAnchor * 0.6 + topFromShoulderAnchor * 0.4 - adjustments.necklineOffsetY;
 
-    const distBottomBelowMidShoulder = targetHeight - distTopAboveMidShoulder;
+    // Chin / face protection: garment collar should not rise above chin
+    let finalDistTopAboveMidShoulder = distTopAboveMidShoulder;
+    if (pNosePt) {
+      const maxCollarHeightAboveMid = Math.hypot(midShoulder.x - pNosePt.x, midShoulder.y - pNosePt.y) * 0.75;
+      finalDistTopAboveMidShoulder = Math.min(distTopAboveMidShoulder, maxCollarHeightAboveMid + anchorNeckY * targetHeight);
+    }
 
-    // Horizontal centering aligned to shoulder midpoint & garment anchor center
+    const distBottomBelowMidShoulder = targetHeight - finalDistTopAboveMidShoulder;
+
+    // Horizontal centering
     const anchorCenterX = (anchorLeftX + anchorRightX) / 2;
     const horizAnchorShift = (0.5 - anchorCenterX) * targetWidth;
 
@@ -236,8 +263,8 @@ export class BodyClothingMapper {
     };
 
     const topCenter: Point2D = {
-      x: alignedMidShoulder.x - downUnitX * distTopAboveMidShoulder,
-      y: alignedMidShoulder.y - downUnitY * distTopAboveMidShoulder,
+      x: alignedMidShoulder.x - downUnitX * finalDistTopAboveMidShoulder,
+      y: alignedMidShoulder.y - downUnitY * finalDistTopAboveMidShoulder,
     };
 
     const bottomCenter: Point2D = {
@@ -248,7 +275,7 @@ export class BodyClothingMapper {
     const centerX = (topCenter.x + bottomCenter.x) / 2;
     const centerY = (topCenter.y + bottomCenter.y) / 2;
 
-    // Subtle hip-width taper for torso warping (bounded tightly to avoid trapezoidal distortion)
+    // Hip taper for natural drape
     const hipDist = Math.hypot(bodyRightHip.x - bodyLeftHip.x, bodyRightHip.y - bodyLeftHip.y);
     const hipTaper = hipsVisible
       ? Math.max(0.9, Math.min(1.08, (hipDist / shoulderDist) * 1.18))
@@ -276,20 +303,53 @@ export class BodyClothingMapper {
       },
     };
 
+    // Calculate absolute canvas coordinates of all 7 anchors for debug visualization
+    const anchorPoints: Record<string, Point2D> = {};
+    const mapAnchorToCanvas = (u: number, v: number): Point2D => {
+      const topX = targetQuad.topLeft.x + (targetQuad.topRight.x - targetQuad.topLeft.x) * u;
+      const topY = targetQuad.topLeft.y + (targetQuad.topRight.y - targetQuad.topLeft.y) * u;
+      const botX = targetQuad.bottomLeft.x + (targetQuad.bottomRight.x - targetQuad.bottomLeft.x) * u;
+      const botY = targetQuad.bottomLeft.y + (targetQuad.bottomRight.y - targetQuad.bottomLeft.y) * u;
+      return {
+        x: topX + (botX - topX) * v,
+        y: topY + (botY - topY) * v,
+      };
+    };
+
+    if (anchors.neckCenter) anchorPoints.neckCenter = mapAnchorToCanvas(anchors.neckCenter.x, anchors.neckCenter.y);
+    if (anchors.leftShoulder) anchorPoints.leftShoulder = mapAnchorToCanvas(anchors.leftShoulder.x, anchors.leftShoulder.y);
+    if (anchors.rightShoulder) anchorPoints.rightShoulder = mapAnchorToCanvas(anchors.rightShoulder.x, anchors.rightShoulder.y);
+    if (anchors.leftArmpit) anchorPoints.leftArmpit = mapAnchorToCanvas(anchors.leftArmpit.x, anchors.leftArmpit.y);
+    if (anchors.rightArmpit) anchorPoints.rightArmpit = mapAnchorToCanvas(anchors.rightArmpit.x, anchors.rightArmpit.y);
+    if (anchors.leftBottom) anchorPoints.leftBottom = mapAnchorToCanvas(anchors.leftBottom.x, anchors.leftBottom.y);
+    if (anchors.rightBottom) anchorPoints.rightBottom = mapAnchorToCanvas(anchors.rightBottom.x, anchors.rightBottom.y);
+
     return {
       centerX,
       centerY,
       width: targetWidth,
       height: targetHeight,
       rotationRad,
-      scaleX: adjustments.scale * adjustments.shoulderWidthScale,
-      scaleY: adjustments.scale,
+      scaleX: adjustments.scale * adjustments.shoulderWidthScale * userGarmentWidthScale,
+      scaleY: adjustments.scale * userGarmentHeightScale,
       targetQuad,
       sourceQuad: {
         topLeft: { x: 0, y: 0 },
         topRight: { x: 1, y: 0 },
         bottomRight: { x: 1, y: 1 },
         bottomLeft: { x: 0, y: 1 },
+      },
+      anchorPoints,
+      bodyReferences: {
+        midShoulder,
+        neckBase,
+        midHip,
+        bodyLeftShoulder,
+        bodyRightShoulder,
+        bodyLeftHip,
+        bodyRightHip,
+        spineTop: topCenter,
+        spineBottom: bottomCenter,
       },
       isValid: true,
     };
@@ -333,7 +393,9 @@ export class BodyClothingMapper {
 
     if (hipDist < 15) return null;
 
-    const rotationRad = Math.atan2(hipDy, hipDx);
+    const baseRotationRad = Math.atan2(hipDy, hipDx);
+    const rotationOffsetRad = ((adjustments.rotationOffsetDeg ?? 0) * Math.PI) / 180;
+    const rotationRad = baseRotationRad + rotationOffsetRad;
     const midHip = { x: (topLeft.x + topRight.x) / 2, y: (topLeft.y + topRight.y) / 2 };
 
     const anchors = asset.remappedAnchors as PantsAnchors;
@@ -346,9 +408,12 @@ export class BodyClothingMapper {
       Math.min(0.25, ((anchors?.leftWaist?.y ?? 0.05) + (anchors?.rightWaist?.y ?? 0.05)) / 2)
     );
 
+    const userWidthScale = adjustments.garmentWidthScale ?? 1.0;
+    const userHeightScale = adjustments.garmentHeightScale ?? 1.0;
+
     const targetWidth =
-      ((hipDist * 1.32) / anchorWaistSpan) * adjustments.scale * adjustments.shoulderWidthScale;
-    const aspectHeight = targetWidth / Math.max(0.3, Math.min(1.4, asset.aspectRatio));
+      ((hipDist * 1.32) / anchorWaistSpan) * adjustments.scale * adjustments.shoulderWidthScale * userWidthScale;
+    const aspectHeight = (targetWidth / Math.max(0.3, Math.min(1.4, asset.aspectRatio))) * userHeightScale;
 
     let legHeight = aspectHeight;
     if (
@@ -361,12 +426,12 @@ export class BodyClothingMapper {
       const pRK = this.toCanvasPoint(lmRightKnee, canvasWidth, canvasHeight, isMirrored);
       const midKnee = { x: (pLK.x + pRK.x) / 2, y: (pLK.y + pRK.y) / 2 };
       const upperLeg = Math.hypot(midKnee.x - midHip.x, midKnee.y - midHip.y);
-      const kneeDriven = upperLeg * 2.05 * adjustments.scale;
+      const kneeDriven = upperLeg * 2.05 * adjustments.scale * userHeightScale;
       legHeight = Math.max(aspectHeight * 0.82, Math.min(aspectHeight * 1.2, kneeDriven));
     }
 
-    const unitX = hipDx / hipDist;
-    const unitY = hipDy / hipDist;
+    const unitX = Math.cos(rotationRad);
+    const unitY = Math.sin(rotationRad);
     const downX = -unitY;
     const downY = unitX;
 
@@ -383,30 +448,47 @@ export class BodyClothingMapper {
       y: midHip.y + downY * distBelowHip + adjustments.offsetY,
     };
 
+    const targetQuad = {
+      topLeft: { x: topCenter.x - unitX * halfW, y: topCenter.y - unitY * halfW },
+      topRight: { x: topCenter.x + unitX * halfW, y: topCenter.y + unitY * halfW },
+      bottomRight: { x: bottomCenter.x + unitX * halfW, y: bottomCenter.y + unitY * halfW },
+      bottomLeft: { x: bottomCenter.x - unitX * halfW, y: bottomCenter.y - unitY * halfW },
+    };
+
     return {
       centerX: (topCenter.x + bottomCenter.x) / 2,
       centerY: (topCenter.y + bottomCenter.y) / 2,
       width: targetWidth,
       height: legHeight,
       rotationRad,
-      scaleX: adjustments.scale * adjustments.shoulderWidthScale,
-      scaleY: adjustments.scale,
-      targetQuad: {
-        topLeft: { x: topCenter.x - unitX * halfW, y: topCenter.y - unitY * halfW },
-        topRight: { x: topCenter.x + unitX * halfW, y: topCenter.y + unitY * halfW },
-        bottomRight: { x: bottomCenter.x + unitX * halfW, y: bottomCenter.y + unitY * halfW },
-        bottomLeft: { x: bottomCenter.x - unitX * halfW, y: bottomCenter.y - unitY * halfW },
-      },
+      scaleX: adjustments.scale * adjustments.shoulderWidthScale * userWidthScale,
+      scaleY: adjustments.scale * userHeightScale,
+      targetQuad,
       sourceQuad: {
         topLeft: { x: 0, y: 0 },
         topRight: { x: 1, y: 0 },
         bottomRight: { x: 1, y: 1 },
         bottomLeft: { x: 0, y: 1 },
       },
+      anchorPoints: {},
+      bodyReferences: {
+        midShoulder: midHip,
+        neckBase: topCenter,
+        midHip,
+        bodyLeftShoulder: topLeft,
+        bodyRightShoulder: topRight,
+        bodyLeftHip: topLeft,
+        bodyRightHip: topRight,
+        spineTop: topCenter,
+        spineBottom: bottomCenter,
+      },
       isValid: true,
     };
   }
 
+  /**
+   * Main mapping entrypoint: dynamically selects Upper or Lower body mapping.
+   */
   mapBodyToGarment(
     landmarks: NormalizedLandmark[],
     item: ClothingItem,
@@ -416,24 +498,13 @@ export class BodyClothingMapper {
     isMirrored: boolean,
     adjustments: TryOnAdjustments
   ): GarmentTransform | null {
-    if (!landmarks || landmarks.length < 33) return null;
+    if (!landmarks || landmarks.length < 25) return null;
 
-    const isUpper =
-      item.garmentType === 'upper' || garmentAnchorService.isUpperBodyAnchors(item.anchors);
-
-    if (isUpper && item.category !== 'Pants') {
-      return this.mapUpperBody(
-        landmarks,
-        item,
-        asset,
-        canvasWidth,
-        canvasHeight,
-        isMirrored,
-        adjustments
-      );
+    if (item.garmentType === 'lower' || item.category === 'Pants') {
+      return this.mapLowerBody(landmarks, asset, canvasWidth, canvasHeight, isMirrored, adjustments);
     }
 
-    return this.mapLowerBody(landmarks, asset, canvasWidth, canvasHeight, isMirrored, adjustments);
+    return this.mapUpperBody(landmarks, item, asset, canvasWidth, canvasHeight, isMirrored, adjustments);
   }
 }
 

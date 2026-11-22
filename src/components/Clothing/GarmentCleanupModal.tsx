@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ClothingItem, GarmentAnchors } from '../../types/clothing';
+import { ClothingItem, GarmentAnchors, UpperBodyAnchors } from '../../types/clothing';
 import { ClothingService } from '../../services/product-importer/clothingService';
 import { GarmentAssetProcessor } from '../../services/image-processing/garmentAssetProcessor';
 import { garmentLoader } from '../../engines/rendering/garmentLoader';
+import { garmentAnchorService } from '../../engines/clothing/garmentAnchorService';
 import { X, Eraser, Crosshair, RotateCcw, Check, Sparkles } from 'lucide-react';
 
 interface GarmentCleanupModalProps {
@@ -13,6 +14,20 @@ interface GarmentCleanupModalProps {
 }
 
 type ToolMode = 'eraser' | 'anchors';
+
+const ANCHOR_LABELS: Record<string, string> = {
+  neckCenter: 'Centre Col',
+  leftShoulder: 'Épaule Gauche',
+  rightShoulder: 'Épaule Droite',
+  leftArmpit: 'Aisselle Gauche',
+  rightArmpit: 'Aisselle Droite',
+  leftBottom: 'Bas Gauche',
+  rightBottom: 'Bas Droit',
+  leftWaist: 'Taille Gauche',
+  rightWaist: 'Taille Droite',
+  leftAnkle: 'Cheville Gauche',
+  rightAnkle: 'Cheville Droite',
+};
 
 export const GarmentCleanupModal: React.FC<GarmentCleanupModalProps> = ({
   isOpen,
@@ -33,7 +48,11 @@ export const GarmentCleanupModal: React.FC<GarmentCleanupModalProps> = ({
   useEffect(() => {
     if (!isOpen || !garment) return;
 
-    setAnchors(garment.anchors);
+    const initialAnchors =
+      garment.garmentType === 'upper' || garment.category !== 'Pants'
+        ? garmentAnchorService.ensureUpperBodyAnchors(garment.anchors as UpperBodyAnchors)
+        : garment.anchors;
+    setAnchors(initialAnchors);
     setActiveAnchorKey(null);
     setStatusMessage('');
 
@@ -356,7 +375,7 @@ export const GarmentCleanupModal: React.FC<GarmentCleanupModalProps> = ({
                             : 'bg-[#1c2336] text-slate-300 border-[#2d364d] hover:text-white'
                         }`}
                       >
-                        {key}
+                        {ANCHOR_LABELS[key] || key}
                       </button>
                     ))}
                 </div>

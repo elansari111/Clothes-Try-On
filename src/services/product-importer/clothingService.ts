@@ -1,4 +1,4 @@
-import { ClothingItem, ClothingCategory, GarmentAnchors } from '../../types/clothing';
+import { ClothingItem, ClothingCategory, GarmentAnchors, GarmentCalibration } from '../../types/clothing';
 import { ClothingStorage } from '../storage/clothingStorage';
 import { ImageProcessor } from '../image-processing/imageProcessor';
 import { ClothingValidator } from '../product-importer/clothingValidator';
@@ -76,6 +76,13 @@ export class ClothingService {
    */
   static updateItem(id: string, updates: Partial<ClothingItem>): ClothingItem[] {
     return ClothingStorage.update(id, updates);
+  }
+
+  /**
+   * Saves per-garment calibration parameters
+   */
+  static saveCalibration(id: string, calibration: GarmentCalibration): ClothingItem[] {
+    return ClothingStorage.saveCalibration(id, calibration);
   }
 
   /**

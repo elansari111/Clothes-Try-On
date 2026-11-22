@@ -1,4 +1,25 @@
-import { GarmentAnchors, UpperBodyAnchors, PantsAnchors, ClothingCategory } from '../../types/clothing';
+import {
+  GarmentAnchors,
+  UpperBodyAnchors,
+  PantsAnchors,
+  ClothingCategory,
+  GarmentCalibration,
+} from '../../types/clothing';
+
+export const DEFAULT_CALIBRATION: GarmentCalibration = {
+  scale: 1.0,
+  garmentWidthScale: 1.0,
+  shoulderWidthScale: 1.0,
+  garmentHeightScale: 1.0,
+  necklineOffsetY: 0,
+  offsetX: 0,
+  offsetY: 0,
+  rotationOffsetDeg: 0,
+  meshWarpStrength: 1.0,
+  enableArmOcclusion: true,
+  opacity: 0.96,
+  enableWarping: true,
+};
 
 export class GarmentAnchorService {
   /**
@@ -15,15 +36,37 @@ export class GarmentAnchorService {
       return defaultPants;
     }
 
-    // Default Upper Body (T-Shirts, Shirts, Jackets, Other)
+    // Default Upper Body (T-Shirts, Shirts, Jackets, Other) with all 7 anchors:
     const defaultUpper: UpperBodyAnchors = {
-      leftShoulder: { x: 0.2, y: 0.15 },
-      rightShoulder: { x: 0.8, y: 0.15 },
-      neckCenter: { x: 0.5, y: 0.08 },
-      leftBottom: { x: 0.22, y: 0.92 },
-      rightBottom: { x: 0.78, y: 0.92 },
+      leftShoulder: { x: 0.22, y: 0.14 },
+      rightShoulder: { x: 0.78, y: 0.14 },
+      neckCenter: { x: 0.5, y: 0.06 },
+      leftArmpit: { x: 0.24, y: 0.42 },
+      rightArmpit: { x: 0.76, y: 0.42 },
+      leftBottom: { x: 0.24, y: 0.95 },
+      rightBottom: { x: 0.76, y: 0.95 },
     };
     return defaultUpper;
+  }
+
+  /**
+   * Ensures upper-body anchors contain all 7 anchor points, adding armpits if missing
+   */
+  ensureUpperBodyAnchors(anchors: GarmentAnchors): UpperBodyAnchors {
+    if (!this.isUpperBodyAnchors(anchors)) {
+      return this.getDefaultAnchors('T-Shirts') as UpperBodyAnchors;
+    }
+
+    const u = anchors as UpperBodyAnchors;
+    return {
+      leftShoulder: u.leftShoulder || { x: 0.22, y: 0.14 },
+      rightShoulder: u.rightShoulder || { x: 0.78, y: 0.14 },
+      neckCenter: u.neckCenter || { x: 0.5, y: 0.06 },
+      leftArmpit: u.leftArmpit || { x: u.leftShoulder?.x ?? 0.24, y: 0.42 },
+      rightArmpit: u.rightArmpit || { x: u.rightShoulder?.x ?? 0.76, y: 0.42 },
+      leftBottom: u.leftBottom || { x: 0.24, y: 0.95 },
+      rightBottom: u.rightBottom || { x: 0.76, y: 0.95 },
+    };
   }
 
   /**
