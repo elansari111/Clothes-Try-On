@@ -4,3 +4,4 @@ export * from './jobs/jobQueue';
 export * from './services/aiTryOnService';
 export * from './hooks/useAITryOn';
 export * from './components/AITryOnModal';
+export * from './components/AITryOnWorkspace';

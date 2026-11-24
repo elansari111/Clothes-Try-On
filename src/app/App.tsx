@@ -13,7 +13,7 @@ import {
 } from '../features/live-ar';
 import { useCamera, VideoResolution } from '../features/camera';
 import { usePoseTracking } from '../features/body-tracking';
-import { AITryOnModal } from '../features/ai-try-on';
+import { AITryOnModal, AITryOnWorkspace } from '../features/ai-try-on';
 import {
   Camera,
   CameraOff,
@@ -63,6 +63,7 @@ export const App: React.FC = () => {
   });
 
   const [filter, setFilter] = useState<string>('All');
+  const [appMode, setAppMode] = useState<'ai-try-on' | 'live-ar'>('ai-try-on');
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [showImportModal, setShowImportModal] = useState<boolean>(false);
   const [showCleanupModal, setShowCleanupModal] = useState<boolean>(false);
@@ -88,6 +89,7 @@ export const App: React.FC = () => {
 
   const {
     status: cameraStatus,
+    stream: cameraStream,
     devices,
     activeDeviceId,
     resolution,
@@ -102,7 +104,17 @@ export const App: React.FC = () => {
     toggleMirror,
   } = useCamera();
 
-  // MediaPipe Pose tracking + Virtual Try-On unified loop
+  // Re-bind active camera stream to Live AR <video> whenever switching into Live AR mode
+  useEffect(() => {
+    if (appMode === 'live-ar' && videoRef.current && cameraStream) {
+      if (videoRef.current.srcObject !== cameraStream) {
+        videoRef.current.srcObject = cameraStream;
+        videoRef.current.play().catch(() => {});
+      }
+    }
+  }, [appMode, cameraStream, videoRef]);
+
+  // MediaPipe Pose tracking + Virtual Try-On unified loop (runs only in Live AR mode)
   const {
     status: poseStatus,
     delegate,
@@ -114,7 +126,7 @@ export const App: React.FC = () => {
   } = usePoseTracking({
     videoRef,
     canvasRef,
-    isCameraActive: cameraStatus === 'active',
+    isCameraActive: cameraStatus === 'active' && appMode === 'live-ar',
     isMirrored,
     showSkeleton,
     selectedGarment,
@@ -307,17 +319,51 @@ export const App: React.FC = () => {
 
   return (
     <div className="flex h-screen w-screen bg-[#0d0f15] text-slate-100 font-sans select-none overflow-hidden">
-      {/* 1. Zone Principale : Miroir / Webcam (Gauche) */}
-      <div className="flex-1 flex flex-col p-6 border-r border-[#1e2330]">
-        {/* Header simple avec sélecteur direct de toutes les caméras */}
-        <div className="flex items-center justify-between pb-4 mb-4 border-b border-[#1e2330]">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white">
-              <Sparkles className="w-4 h-4" />
+      {/* 1. Zone Principale : Essai IA (Principal) ou Miroir Live AR (Gauche) */}
+      <div className="flex-1 flex flex-col p-6 border-r border-[#1e2330] min-w-0">
+        {/* Header simple avec sélecteur de mode et de caméra */}
+        <div className="flex items-center justify-between gap-3 pb-4 mb-4 border-b border-[#1e2330] flex-wrap">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div>
+                <h1 className="text-sm font-bold tracking-tight text-white">Virtual Try-On</h1>
+                <p className="text-[11px] text-slate-400">
+                  {appMode === 'ai-try-on'
+                    ? 'Essayage IA Photoréaliste (Genlook)'
+                    : 'Miroir Virtuel AR en temps réel'}
+                </p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-sm font-bold tracking-tight text-white">Virtual Try-On</h1>
-              <p className="text-[11px] text-slate-400">Miroir Virtuel en temps réel</p>
+
+            {/* Sélecteur Principal : Essai IA vs Live AR */}
+            <div className="flex items-center bg-[#141824] p-1 rounded-xl border border-[#222838]">
+              <button
+                type="button"
+                onClick={() => setAppMode('ai-try-on')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+                  appMode === 'ai-try-on'
+                    ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Essai IA</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAppMode('live-ar')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+                  appMode === 'live-ar'
+                    ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Scan className="w-3.5 h-3.5" />
+                <span>Miroir Live AR</span>
+              </button>
             </div>
           </div>
 
@@ -344,8 +390,8 @@ export const App: React.FC = () => {
               <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
             </div>
 
-            {/* Badge Tracking Body Status, FPS & Latency lorsque la caméra est active */}
-            {cameraStatus === 'active' && (
+            {/* Badge Tracking Body Status, FPS & Latency en mode Live AR */}
+            {appMode === 'live-ar' && cameraStatus === 'active' && (
               <div className="flex items-center gap-2 text-xs px-2.5 py-1 rounded-xl bg-[#141824] border border-[#222838]">
                 <Activity className="w-3.5 h-3.5 text-indigo-400" />
                 <span className="text-[11px] font-mono text-slate-300">
@@ -362,8 +408,22 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Cadre Caméra / Miroir */}
-        <div className="flex-1 relative rounded-2xl bg-[#141824] border border-[#222838] flex flex-col items-center justify-center overflow-hidden">
+        {/* Workspace Principal : Essai IA (défaut) ou Miroir Live AR */}
+        {appMode === 'ai-try-on' ? (
+          <AITryOnWorkspace
+            garment={selectedGarment}
+            cameraStatus={cameraStatus}
+            cameraStream={cameraStream}
+            isMirrored={isMirrored}
+            cameraError={errorMessage}
+            onStartCamera={() => startCamera()}
+            onStopCamera={stopCamera}
+            onToggleMirror={toggleMirror}
+            onOpenCleanup={() => setShowCleanupModal(true)}
+          />
+        ) : (
+          /* Cadre Caméra / Miroir Live AR */
+          <div className="flex-1 relative rounded-2xl bg-[#141824] border border-[#222838] flex flex-col items-center justify-center overflow-hidden">
           {/* Vidéo de flux en direct */}
           <video
             ref={videoRef}
@@ -1075,6 +1135,7 @@ export const App: React.FC = () => {
             </div>
           )}
         </div>
+        )}
       </div>
 
       {/* 2. Panneau Latéral : Sélection des Vêtements (Droite) */}
