@@ -13,6 +13,7 @@ import {
 } from '../features/live-ar';
 import { useCamera, VideoResolution } from '../features/camera';
 import { usePoseTracking } from '../features/body-tracking';
+import { AITryOnModal } from '../features/ai-try-on';
 import {
   Camera,
   CameraOff,
@@ -65,6 +66,7 @@ export const App: React.FC = () => {
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [showImportModal, setShowImportModal] = useState<boolean>(false);
   const [showCleanupModal, setShowCleanupModal] = useState<boolean>(false);
+  const [showAITryOnModal, setShowAITryOnModal] = useState<boolean>(false);
   const [showSkeleton, setShowSkeleton] = useState<boolean>(false);
   const [showGarment, setShowGarment] = useState<boolean>(true);
   const [adjustments, setAdjustments] = useState<TryOnAdjustments>(INITIAL_ADJUSTMENTS);
@@ -627,6 +629,14 @@ export const App: React.FC = () => {
 
               <div className="flex items-center gap-2">
                 <button
+                  onClick={() => setShowAITryOnModal(true)}
+                  className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 transition shadow-md shadow-indigo-600/25"
+                  title="Générer un essayage IA haute précision avec Genlook"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Essai IA</span>
+                </button>
+                <button
                   onClick={() => setShowCleanupModal(true)}
                   className="p-2 rounded-lg bg-[#181d2c] hover:bg-[#20273a] text-slate-300 hover:text-white border border-[#2d354b] transition"
                   title="Nettoyer le cintre / Calibrer les points d'ancrage"
@@ -1170,6 +1180,16 @@ export const App: React.FC = () => {
           setSelectedGarment(updatedItem);
           void virtualTryOnEngine.setActiveGarment(updatedItem, true);
         }}
+      />
+
+      {/* Modal Essayage IA Cloud (Genlook API) */}
+      <AITryOnModal
+        isOpen={showAITryOnModal}
+        onClose={() => setShowAITryOnModal(false)}
+        garment={selectedGarment}
+        videoRef={videoRef}
+        isCameraActive={cameraStatus === 'active'}
+        isMirrored={isMirrored}
       />
     </div>
   );

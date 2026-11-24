@@ -1,5 +1,9 @@
 import { ipcMain, app } from 'electron';
 import { getMainWindow } from '../windows/mainWindow';
+import {
+  mainGenlookService,
+  type MainGenlookSubmitPayload,
+} from '../services/genlookService';
 
 export interface SystemInfoPayload {
   platform: string;
@@ -20,6 +24,25 @@ export function registerIpcHandlers(): void {
       nodeVersion: process.versions.node,
       appVersion: app.getVersion(),
     };
+  });
+
+  // Cloud AI Try-On (Genlook API kept strictly in main process)
+  ipcMain.handle('ai-tryon:get-status', async (_event, fetchCredits: boolean = true) => {
+    return mainGenlookService.getStatus(Boolean(fetchCredits));
+  });
+
+  ipcMain.handle('ai-tryon:submit', async (_event, payload: MainGenlookSubmitPayload) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('Invalid AI Try-On submission payload.');
+    }
+    return mainGenlookService.submitTryOn(payload);
+  });
+
+  ipcMain.handle('ai-tryon:poll', async (_event, generationId: string) => {
+    if (typeof generationId !== 'string' || !generationId.trim()) {
+      throw new Error('Invalid generationId.');
+    }
+    return mainGenlookService.pollGeneration(generationId);
   });
 
   // Window control actions

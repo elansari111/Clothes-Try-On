@@ -10,9 +10,19 @@ export type TryOnJobStatus =
   | 'failed';
 
 export interface TryOnGenerationOptions {
+  garmentId?: string;
+  garmentTitle?: string;
+  garmentDescription?: string;
   category?: string;
-  resolution?: 'standard' | 'hd';
+  resolution?: 'default' | '2k';
   preserveBackground?: boolean;
+}
+
+export interface ProviderStatus {
+  configured: boolean;
+  provider: string;
+  creditBalance?: number;
+  error?: string;
 }
 
 export interface TryOnJob {
@@ -36,6 +46,8 @@ export interface AITryOnProvider {
   readonly id: string;
   readonly name: string;
   readonly isConfigured: boolean;
+
+  getStatus?(fetchCredits?: boolean): Promise<ProviderStatus>;
 
   submitJob(
     personImage: Blob | string,

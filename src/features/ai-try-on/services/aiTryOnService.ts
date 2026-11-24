@@ -1,4 +1,9 @@
-import { AITryOnProvider, TryOnJob, TryOnGenerationOptions } from '../types/aiTryOn';
+import {
+  AITryOnProvider,
+  ProviderStatus,
+  TryOnJob,
+  TryOnGenerationOptions,
+} from '../types/aiTryOn';
 import { genlookProvider } from '../providers/genlook/genlookProvider';
 import { jobQueue } from '../jobs/jobQueue';
 
@@ -34,6 +39,17 @@ export class AITryOnService {
       throw new Error(`Cannot set unknown AI Try-On provider: "${id}"`);
     }
     this.activeProviderId = id;
+  }
+
+  async getProviderStatus(fetchCredits: boolean = true): Promise<ProviderStatus> {
+    const provider = this.getActiveProvider();
+    if (provider.getStatus) {
+      return provider.getStatus(fetchCredits);
+    }
+    return {
+      configured: provider.isConfigured,
+      provider: provider.id,
+    };
   }
 
   async submitTryOn(

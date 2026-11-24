@@ -327,37 +327,37 @@ export class GarmentAssetProcessor {
       }
     }
 
-    // Only treat as a hanger if the thin top stalk spans at least 3% of garment height (avoids touching normal collars)
+    // Only clear top hook stalk if the thin top stalk spans at least 3% of garment height
     const minHookRows = Math.max(6, Math.floor(bh * 0.03));
-    if (hookEndRow < minHookRows) {
-      return false;
-    }
-
     let pixelsCleared = 0;
 
-    // Step 1: Clear the thin hanger hook stalk cleanly above the collar
-    for (let ry = 0; ry <= hookEndRow; ry++) {
-      const y = bbox.y + ry;
-      const rowOff = y * w * 4;
-      for (let rx = 0; rx < bw; rx++) {
-        const x = bbox.x + rx;
-        const off = rowOff + x * 4;
-        if (data[off + 3] > 0) {
-          data[off + 3] = 0;
-          pixelsCleared++;
+    if (hookEndRow >= minHookRows) {
+      // Step 1: Clear the thin hanger hook stalk cleanly above the collar
+      for (let ry = 0; ry <= hookEndRow; ry++) {
+        const y = bbox.y + ry;
+        const rowOff = y * w * 4;
+        for (let rx = 0; rx < bw; rx++) {
+          const x = bbox.x + rx;
+          const off = rowOff + x * 4;
+          if (data[off + 3] > 0) {
+            data[off + 3] = 0;
+            pixelsCleared++;
+          }
         }
       }
+    } else {
+      hookEndRow = -1;
     }
 
-    // Step 2: Clean visible wooden/metal hanger bar sitting inside the open collar notch
-    // right below hookEndRow (within a small collar-neck zone: center 34% width, next 10% height).
-    // Only erase pixels whose color differs strongly from the shirt fabric AND looks woody/metallic/gray/dark hanger.
+    // Step 2: Clean visible wooden/metal/plastic hanger bar AND enclosed background pixels
+    // sitting inside the open collar notch right below hookEndRow (runs even when no top hook exists).
     if (fabCount > 20) {
-      const barScanEnd = Math.min(bh - 1, hookEndRow + Math.floor(bh * 0.11));
-      const notchLeft = bbox.x + Math.floor(bw * 0.34);
-      const notchRight = bbox.x + Math.floor(bw * 0.66);
+      const barScanStart = Math.max(0, hookEndRow + 1);
+      const barScanEnd = Math.min(bh - 1, barScanStart + Math.floor(bh * 0.14));
+      const notchLeft = bbox.x + Math.floor(bw * 0.30);
+      const notchRight = bbox.x + Math.floor(bw * 0.70);
 
-      for (let ry = hookEndRow + 1; ry <= barScanEnd; ry++) {
+      for (let ry = barScanStart; ry <= barScanEnd; ry++) {
         const y = bbox.y + ry;
         const rowOff = y * w * 4;
         for (let x = notchLeft; x <= notchRight; x++) {
@@ -370,22 +370,21 @@ export class GarmentAssetProcessor {
 
           const distFromFabric = this.colorDist(r, g, b, fabR, fabG, fabB);
           // Warm wood / tan / brown / metallic gray / dark plastic hanger signature far from fabric color
-          const isWoodLike = r > g && g > b && r - b > 25 && r > 90;
-          const isDarkMetalOrPlastic = Math.max(r, g, b) < 75 && distFromFabric > 70;
-          const isMetallicGray =
-            Math.abs(r - g) < 16 && Math.abs(g - b) < 16 && distFromFabric > 65;
+          const isWoodLike = r > g && g >= b && r - b > 18 && r > 80;
+          const isDarkMetalOrPlastic = Math.max(r, g, b) < 82 && distFromFabric > 55;
+          const isMetallicOrStudioBg =
+            Math.abs(r - g) < 18 && Math.abs(g - b) < 18 && distFromFabric > 52;
 
-          if (distFromFabric > 62 && (isWoodLike || isDarkMetalOrPlastic || isMetallicGray)) {
-            // Only remove if pixel has transparent sky/background above it (within 6px) so we don't punch holes in fabric
-            let exposedAbove = false;
-            for (let dy = 1; dy <= 8; dy++) {
+          if (distFromFabric > 52 && (isWoodLike || isDarkMetalOrPlastic || isMetallicOrStudioBg)) {
+            let exposedNearTop = false;
+            for (let dy = 1; dy <= 14; dy++) {
               const py = y - dy;
               if (py < 0 || data[(py * w + x) * 4 + 3] <= alphaThresh) {
-                exposedAbove = true;
+                exposedNearTop = true;
                 break;
               }
             }
-            if (exposedAbove) {
+            if (exposedNearTop) {
               data[off + 3] = 0;
               pixelsCleared++;
             }
@@ -394,7 +393,29 @@ export class GarmentAssetProcessor {
       }
     }
 
-    return pixelsCleared > 15;
+    // Step 3: Remove any thin stray vertical wire / fringe specs (<= 5 opaque pixels per row)
+    // in the upper 35% of the bounding box so no line artifact floats above the collar.
+    const strayScanEnd = Math.floor(bh * 0.35);
+    for (let ry = 0; ry < strayScanEnd; ry++) {
+      const y = bbox.y + ry;
+      const rowOff = y * w * 4;
+      let count = 0;
+      for (let rx = 0; rx < bw; rx++) {
+        const x = bbox.x + rx;
+        if (data[rowOff + x * 4 + 3] > alphaThresh) count++;
+      }
+      if (count > 0 && count <= 5) {
+        for (let rx = 0; rx < bw; rx++) {
+          const x = bbox.x + rx;
+          if (data[rowOff + x * 4 + 3] > 0) {
+            data[rowOff + x * 4 + 3] = 0;
+            pixelsCleared++;
+          }
+        }
+      }
+    }
+
+    return pixelsCleared > 10;
   }
 
   /**
@@ -404,7 +425,7 @@ export class GarmentAssetProcessor {
     data: Uint8ClampedArray,
     w: number,
     h: number,
-    alphaThreshold: number = 24
+    alphaThreshold: number = 28
   ): BoundingBox {
     let minX = w;
     let minY = h;
@@ -414,15 +435,23 @@ export class GarmentAssetProcessor {
 
     for (let y = 0; y < h; y++) {
       const rowOffset = y * w * 4;
+      let rowHits = 0;
+      let rowFirstX = w;
+      let rowLastX = 0;
       for (let x = 0; x < w; x++) {
         const alpha = data[rowOffset + x * 4 + 3];
         if (alpha > alphaThreshold) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-          found = true;
+          rowHits++;
+          if (x < rowFirstX) rowFirstX = x;
+          if (x > rowLastX) rowLastX = x;
         }
+      }
+      if (rowHits >= 3) {
+        if (rowFirstX < minX) minX = rowFirstX;
+        if (rowLastX > maxX) maxX = rowLastX;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        found = true;
       }
     }
 
@@ -664,6 +693,29 @@ export class GarmentAssetProcessor {
           );
 
           if (success) {
+            // Clear enclosed studio-background pockets trapped inside hanger/collar loops
+            const loopYEnd = Math.floor(workH * 0.34);
+            const loopXStart = Math.floor(workW * 0.32);
+            const loopXEnd = Math.floor(workW * 0.68);
+            for (let y = 0; y < loopYEnd; y++) {
+              const rowOff = y * workW * 4;
+              for (let x = loopXStart; x < loopXEnd; x++) {
+                const off = rowOff + x * 4;
+                if (imageData.data[off + 3] > 20) {
+                  const d = this.colorDist(
+                    imageData.data[off],
+                    imageData.data[off + 1],
+                    imageData.data[off + 2],
+                    borderBg.r,
+                    borderBg.g,
+                    borderBg.b
+                  );
+                  if (d <= 44) {
+                    imageData.data[off + 3] = 0;
+                  }
+                }
+              }
+            }
             workCtx.putImageData(imageData, 0, 0);
             backgroundRemoved = true;
             hasTransparency = true;

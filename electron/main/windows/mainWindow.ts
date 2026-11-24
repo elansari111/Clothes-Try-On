@@ -23,7 +23,7 @@ export function createMainWindow(): BrowserWindow {
     title: ELECTRON_CONFIG.appName,
     autoHideMenuBar: true,
     webPreferences: {
-      preload: path.join(__dirname, '../../preload/index.cjs'),
+      preload: path.join(__dirname, '../preload/index.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
@@ -33,7 +33,7 @@ export function createMainWindow(): BrowserWindow {
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../../../dist/index.html'));
+    mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'));
   }
 
   mainWindow.on('closed', () => {
