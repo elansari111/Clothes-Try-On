@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Desktop Virtual Try-On application using Electron, React, MediaPipe and Canvas/Three.js",
-  "main": "dist-electron/main/index.js",
+  "main": "dist-electron/main/index.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",

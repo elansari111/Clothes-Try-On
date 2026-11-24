@@ -3,8 +3,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { ELECTRON_CONFIG } from '../../config/index';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const currentDir =
+  typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -23,7 +23,7 @@ export function createMainWindow(): BrowserWindow {
     title: ELECTRON_CONFIG.appName,
     autoHideMenuBar: true,
     webPreferences: {
-      preload: path.join(__dirname, '../preload/index.cjs'),
+      preload: path.join(currentDir, '../preload/index.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
@@ -33,8 +33,18 @@ export function createMainWindow(): BrowserWindow {
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'));
+    mainWindow.loadFile(path.join(currentDir, '../../dist/index.html'));
   }
+
+  mainWindow.webContents.on('preload-error', (_event, preloadPath, error) => {
+    console.error('[Electron preload-error]', preloadPath, error);
+  });
+
+  mainWindow.webContents.on('console-message', (details) => {
+    if (details.level === 'error') {
+      console.error(`[Renderer Error] ${details.message} (${details.sourceId}:${details.lineNumber})`);
+    }
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;

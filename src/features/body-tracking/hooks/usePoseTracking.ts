@@ -97,15 +97,17 @@ export function usePoseTracking({
   /**
    * Initializes the pose landmarker model
    */
-  const initEngine = useCallback(async (customConfig?: Partial<PoseEngineConfig>) => {
+  const initEngine = useCallback(async (customConfig?: Partial<PoseEngineConfig>): Promise<boolean> => {
     setStatus('initializing');
     try {
       await poseEngineService.initialize(customConfig);
       setDelegate(poseEngineService.getDelegate());
       setStatus('no_person');
+      return true;
     } catch (err) {
       console.error('Failed to initialize pose engine:', err);
       setStatus('error');
+      return false;
     }
   }, []);
 
@@ -122,106 +124,116 @@ export function usePoseTracking({
     const loop = (timestamp: number) => {
       if (!isRunningRef.current) return;
 
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
+      try {
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
 
-      if (video && video.readyState >= 2 && canvas) {
-        // Sync canvas internal resolution with video native resolution
-        if (video.videoWidth && video.videoHeight) {
+        if (
+          video &&
+          video.readyState >= 2 &&
+          video.videoWidth > 0 &&
+          video.videoHeight > 0 &&
+          canvas
+        ) {
+          // Sync canvas internal resolution with video native resolution
           if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
           }
-        }
 
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          // Process frame with MediaPipe (returns null if same video frame)
-          const frameResult = poseEngineService.processVideoFrame(video, timestamp);
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            // Process frame with MediaPipe (returns null if same video frame)
+            const frameResult = poseEngineService.processVideoFrame(video, timestamp);
 
-          if (frameResult !== null) {
-            if (frameResult.landmarks && frameResult.landmarks.length > 0) {
-              consecutiveMissesRef.current = 0;
-              latestFrameResultRef.current = frameResult;
+            if (frameResult !== null) {
+              if (frameResult.landmarks && frameResult.landmarks.length > 0) {
+                consecutiveMissesRef.current = 0;
+                latestFrameResultRef.current = frameResult;
 
-              // Update measurements and confidence at throttled rate
-              if (frameCountRef.current % 5 === 0) {
-                setStatus('active');
-                setConfidence(frameResult.confidence);
-                setMeasurements(frameResult.measurements);
-              }
-            } else {
-              consecutiveMissesRef.current++;
-              if (consecutiveMissesRef.current > 15) {
-                setStatus('no_person');
-                setConfidence(0);
-                latestFrameResultRef.current = null;
-                virtualTryOnEngine.resetTransform();
-              } else if (consecutiveMissesRef.current > 5) {
-                setStatus('lost');
+                // Update measurements and confidence at throttled rate
+                if (frameCountRef.current % 5 === 0) {
+                  setStatus('active');
+                  setConfidence(frameResult.confidence);
+                  setMeasurements(frameResult.measurements);
+                }
+              } else {
+                consecutiveMissesRef.current++;
+                if (consecutiveMissesRef.current > 15) {
+                  setStatus('no_person');
+                  setConfidence(0);
+                  latestFrameResultRef.current = null;
+                  virtualTryOnEngine.resetTransform();
+                } else if (consecutiveMissesRef.current > 5) {
+                  setStatus('lost');
+                }
               }
             }
-          }
 
-          // Always clear and render using the latest valid landmarks (keeps UI adjustments smooth even between video frames)
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Always clear and render using the latest valid landmarks (keeps UI adjustments smooth even between video frames)
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-          const activePose = latestFrameResultRef.current;
-          if (activePose && activePose.landmarks && activePose.landmarks.length > 0) {
-            // LAYER 1: Virtual Try-On Garment Overlay + Arm Occlusion + Debug Overlay
-            const tryOnRes = virtualTryOnEngine.renderFrame({
-              ctx,
-              canvasWidth: canvas.width,
-              canvasHeight: canvas.height,
-              landmarks: activePose.landmarks,
-              garment: selectedGarmentRef.current,
-              isMirrored: isMirroredRef.current,
-              showGarment: showGarmentRef.current,
-              adjustments: adjustmentsRef.current,
-              video,
-              debugOptions: debugOptionsRef.current,
-              confidence: activePose.confidence,
-              fps: fpsRef.current,
-            });
-
-            if (tryOnRes.rendered) {
-              latencyAccumRef.current += tryOnRes.latencyMs;
-              latencySamplesRef.current += 1;
-            }
-
-            // LAYER 2: Standalone Skeleton Visualization (when not already drawn by debug overlay)
-            if (showSkeletonRef.current && !debugOptionsRef.current?.showSkeleton) {
-              drawSkeleton(ctx, activePose.landmarks, canvas.width, canvas.height, {
+            const activePose = latestFrameResultRef.current;
+            if (activePose && activePose.landmarks && activePose.landmarks.length > 0) {
+              // LAYER 1: Virtual Try-On Garment Overlay + Arm Occlusion + Debug Overlay
+              const tryOnRes = virtualTryOnEngine.renderFrame({
+                ctx,
+                canvasWidth: canvas.width,
+                canvasHeight: canvas.height,
+                landmarks: activePose.landmarks,
+                garment: selectedGarmentRef.current,
                 isMirrored: isMirroredRef.current,
-                showLandmarks: true,
-                showConnections: true,
+                showGarment: showGarmentRef.current,
+                adjustments: adjustmentsRef.current,
+                video,
+                debugOptions: debugOptionsRef.current,
+                confidence: activePose.confidence,
+                fps: fpsRef.current,
               });
+
+              if (tryOnRes.rendered) {
+                latencyAccumRef.current += tryOnRes.latencyMs;
+                latencySamplesRef.current += 1;
+              }
+
+              // LAYER 2: Standalone Skeleton Visualization (when not already drawn by debug overlay)
+              if (showSkeletonRef.current && !debugOptionsRef.current?.showSkeleton) {
+                drawSkeleton(ctx, activePose.landmarks, canvas.width, canvas.height, {
+                  isMirrored: isMirroredRef.current,
+                  showLandmarks: true,
+                  showConnections: true,
+                });
+              }
             }
           }
-        }
 
-        // FPS & average latency calculation (once per second)
-        frameCountRef.current++;
-        const now = performance.now();
-        if (now - lastFpsCalcTimeRef.current >= 1000) {
-          const calculatedFps = Math.round((frameCountRef.current * 1000) / (now - lastFpsCalcTimeRef.current));
-          fpsRef.current = calculatedFps;
-          setFps(calculatedFps);
-          if (latencySamplesRef.current > 0) {
-            setRenderLatencyMs(
-              Math.round((latencyAccumRef.current / latencySamplesRef.current) * 10) / 10
-            );
-          } else {
-            setRenderLatencyMs(0);
+          // FPS & average latency calculation (once per second)
+          frameCountRef.current++;
+          const now = performance.now();
+          if (now - lastFpsCalcTimeRef.current >= 1000) {
+            const calculatedFps = Math.round((frameCountRef.current * 1000) / (now - lastFpsCalcTimeRef.current));
+            fpsRef.current = calculatedFps;
+            setFps(calculatedFps);
+            if (latencySamplesRef.current > 0) {
+              setRenderLatencyMs(
+                Math.round((latencyAccumRef.current / latencySamplesRef.current) * 10) / 10
+              );
+            } else {
+              setRenderLatencyMs(0);
+            }
+            frameCountRef.current = 0;
+            latencyAccumRef.current = 0;
+            latencySamplesRef.current = 0;
+            lastFpsCalcTimeRef.current = now;
           }
-          frameCountRef.current = 0;
-          latencyAccumRef.current = 0;
-          latencySamplesRef.current = 0;
-          lastFpsCalcTimeRef.current = now;
         }
+      } catch (loopErr) {
+        console.error('Error inside Live AR tracking loop:', loopErr);
       }
 
-      animFrameIdRef.current = requestAnimationFrame(loop);
+      if (isRunningRef.current) {
+        animFrameIdRef.current = requestAnimationFrame(loop);
+      }
     };
 
     animFrameIdRef.current = requestAnimationFrame(loop);
@@ -245,6 +257,7 @@ export function usePoseTracking({
     }
 
     latestFrameResultRef.current = null;
+    poseEngineService.resetFrameState();
     virtualTryOnEngine.resetTransform();
     setFps(0);
     setRenderLatencyMs(0);
@@ -257,8 +270,8 @@ export function usePoseTracking({
     let isCancelled = false;
 
     if (isCameraActive) {
-      initEngine().then(() => {
-        if (!isCancelled) {
+      initEngine().then((ok) => {
+        if (ok && !isCancelled) {
           startTrackingLoop();
         }
       });

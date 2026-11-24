@@ -1,4 +1,6 @@
 import { ipcMain, app } from 'electron';
+import fs from 'node:fs';
+import path from 'node:path';
 import { getMainWindow } from '../windows/mainWindow';
 import {
   mainGenlookService,
@@ -43,6 +45,22 @@ export function registerIpcHandlers(): void {
       throw new Error('Invalid generationId.');
     }
     return mainGenlookService.pollGeneration(generationId);
+  });
+
+  // Load local MediaPipe pose model bytes safely (supports file:// production builds)
+  ipcMain.handle('mediapipe:load-model', async (): Promise<Uint8Array | null> => {
+    const candidates = [
+      path.join(process.cwd(), 'public', 'models', 'pose_landmarker_lite.task'),
+      path.join(app.getAppPath(), 'dist', 'models', 'pose_landmarker_lite.task'),
+      path.join(app.getAppPath(), 'public', 'models', 'pose_landmarker_lite.task'),
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        const buf = await fs.promises.readFile(candidate);
+        return new Uint8Array(buf);
+      }
+    }
+    return null;
   });
 
   // Window control actions

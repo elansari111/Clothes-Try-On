@@ -17,8 +17,17 @@ export default defineConfig({
         vite: {
           build: {
             outDir: 'dist-electron/main',
+            lib: {
+              entry: 'electron/main/index.ts',
+              formats: ['cjs'],
+              fileName: () => 'index.cjs',
+            },
             rollupOptions: {
               external: ['electron', '@genlook/api', 'zod'],
+              output: {
+                format: 'cjs',
+                entryFileNames: 'index.cjs',
+              },
             },
           },
         },

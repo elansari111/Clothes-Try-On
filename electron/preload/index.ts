@@ -19,6 +19,7 @@ export interface ElectronAPI {
     submit: (payload: MainGenlookSubmitPayload) => Promise<MainGenlookGenerationState>;
     poll: (generationId: string) => Promise<MainGenlookGenerationState>;
   };
+  loadMediaPipeModel: () => Promise<Uint8Array | null>;
   minimize: () => void;
   toggleMaximize: () => void;
   close: () => void;
@@ -33,6 +34,7 @@ const electronAPI: ElectronAPI = {
     submit: (payload) => ipcRenderer.invoke('ai-tryon:submit', payload),
     poll: (generationId) => ipcRenderer.invoke('ai-tryon:poll', generationId),
   },
+  loadMediaPipeModel: () => ipcRenderer.invoke('mediapipe:load-model'),
   minimize: () => ipcRenderer.send('window:minimize'),
   toggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),
   close: () => ipcRenderer.send('window:close'),

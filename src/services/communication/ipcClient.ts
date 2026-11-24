@@ -43,6 +43,7 @@ interface WindowWithElectronAPI {
       submit: (payload: GenlookSubmitPayload) => Promise<GenlookGenerationPayload>;
       poll: (generationId: string) => Promise<GenlookGenerationPayload>;
     };
+    loadMediaPipeModel?: () => Promise<Uint8Array | null>;
     minimize: () => void;
     toggleMaximize: () => void;
     close: () => void;
@@ -99,6 +100,15 @@ export class IpcClient {
       throw new Error("Le suivi Genlook nécessite l'application Desktop Electron.");
     }
     return this.api.aiTryOn.poll(generationId);
+  }
+
+  static async loadMediaPipeModel(): Promise<Uint8Array | null> {
+    if (!this.api?.loadMediaPipeModel) return null;
+    try {
+      return await this.api.loadMediaPipeModel();
+    } catch {
+      return null;
+    }
   }
 
   static minimizeWindow(): void {
